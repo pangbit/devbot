@@ -15,10 +15,17 @@ type fakeSender struct {
 }
 
 func (f *fakeSender) SendText(_ context.Context, chatID, text string) error {
-    f.called = true
-    f.chatID = chatID
-    f.text = text
-    return nil
+	f.called = true
+	f.chatID = chatID
+	f.text = text
+	return nil
+}
+
+func (f *fakeSender) SendTextChunked(_ context.Context, chatID, text string) error {
+	f.called = true
+	f.chatID = chatID
+	f.text = text
+	return nil
 }
 
 func TestHandleMessage_TextEcho(t *testing.T) {

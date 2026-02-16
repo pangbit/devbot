@@ -9,7 +9,8 @@ import (
 )
 
 type Sender interface {
-    SendText(ctx context.Context, chatID, text string) error
+	SendText(ctx context.Context, chatID, text string) error
+	SendTextChunked(ctx context.Context, chatID, text string) error
 }
 
 type Handler struct {

@@ -8,8 +8,10 @@ import (
     larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
+const MaxMessageLen = 4000
+
 type LarkSender struct {
-    client *lark.Client
+	client *lark.Client
 }
 
 func NewLarkSender(client *lark.Client) *LarkSender {
@@ -26,12 +28,49 @@ func buildSendMessageBody(chatID, text string) map[string]interface{} {
 }
 
 func (s *LarkSender) SendText(ctx context.Context, chatID, text string) error {
-    body := buildSendMessageBody(chatID, text)
-    _, err := s.client.Post(
-        ctx,
-        "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
-        body,
-        larkcore.AccessTokenTypeTenant,
-    )
-    return err
+	body := buildSendMessageBody(chatID, text)
+	_, err := s.client.Post(
+		ctx,
+		"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+		body,
+		larkcore.AccessTokenTypeTenant,
+	)
+	return err
+}
+
+func SplitMessage(text string, maxLen int) []string {
+	if len(text) <= maxLen {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(text) > 0 {
+		if len(text) <= maxLen {
+			chunks = append(chunks, text)
+			break
+		}
+		cutAt := maxLen
+		lastNewline := -1
+		for i := 0; i < maxLen && i < len(text); i++ {
+			if text[i] == '\n' {
+				lastNewline = i + 1
+			}
+		}
+		if lastNewline > 0 {
+			cutAt = lastNewline
+		}
+		chunks = append(chunks, text[:cutAt])
+		text = text[cutAt:]
+	}
+	return chunks
+}
+
+func (s *LarkSender) SendTextChunked(ctx context.Context, chatID, text string) error {
+	chunks := SplitMessage(text, MaxMessageLen)
+	for _, chunk := range chunks {
+		if err := s.SendText(ctx, chatID, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
