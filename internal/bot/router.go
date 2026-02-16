@@ -97,7 +97,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/diff":
 		r.cmdGit(ctx, chatID, "diff")
 	case "/commit":
-		r.cmdGit(ctx, chatID, "add -A && git commit -m \""+args+"\"")
+		r.cmdCommit(ctx, chatID, args)
 	case "/push":
 		r.cmdGit(ctx, chatID, "push")
 	case "/undo":
@@ -371,6 +371,16 @@ func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 	r.execClaudeQueued(ctx, chatID, session, prompt)
 }
 
+func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
+	if msg == "" {
+		r.sender.SendText(ctx, chatID, "Usage: /commit <message>")
+		return
+	}
+	session := r.getSession(chatID)
+	prompt := fmt.Sprintf("Stage all changes with `git add -A`, then commit with the message: %s\nOnly show the command output, no explanation.", msg)
+	r.execClaudeQueued(ctx, chatID, session, prompt)
+}
+
 func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 	session := r.getSession(chatID)
 	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
@@ -461,7 +471,11 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, session *S
 func (r *Router) execClaude(ctx context.Context, chatID string, session *Session, prompt string) {
 	r.sender.SendText(ctx, chatID, "Executing...")
 
-	output, err := r.executor.Exec(ctx, prompt, session.WorkDir, session.ClaudeSessionID)
+	permMode := session.PermissionMode
+	if permMode == "" {
+		permMode = "safe"
+	}
+	output, err := r.executor.Exec(ctx, prompt, session.WorkDir, session.ClaudeSessionID, permMode)
 	if err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
 		return

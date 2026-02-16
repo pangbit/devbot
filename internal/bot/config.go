@@ -12,6 +12,7 @@ type Config struct {
 	AppID          string
 	AppSecret      string
 	AllowedUserIDs map[string]bool
+	BotOpenID      string
 	WorkRoot       string
 	ClaudePath     string
 	ClaudeModel    string
@@ -68,6 +69,8 @@ func LoadConfig() (Config, error) {
 		stateFile = filepath.Join(home, ".devbot", "state.json")
 	}
 
+	botOpenID := strings.TrimSpace(os.Getenv("DEVBOT_BOT_OPEN_ID"))
+
 	skipBotSelf := true
 	if v := strings.TrimSpace(os.Getenv("DEVBOT_SKIP_BOT_SELF")); v == "false" || v == "0" {
 		skipBotSelf = false
@@ -77,6 +80,7 @@ func LoadConfig() (Config, error) {
 		AppID:          appID,
 		AppSecret:      appSecret,
 		AllowedUserIDs: allowedUserIDs,
+		BotOpenID:      botOpenID,
 		WorkRoot:       workRoot,
 		ClaudePath:     claudePath,
 		ClaudeModel:    claudeModel,

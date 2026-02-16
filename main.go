@@ -36,7 +36,7 @@ func main() {
     router := bot.NewRouter(executor, store, sender, cfg.AllowedUserIDs, cfg.WorkRoot)
     queue := bot.NewMessageQueue()
     router.SetQueue(queue)
-    handler := bot.NewHandler(router, cfg.SkipBotSelf, "")
+    handler := bot.NewHandler(router, cfg.SkipBotSelf, cfg.BotOpenID)
 
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
