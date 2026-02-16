@@ -49,6 +49,20 @@ func main() {
         sig := <-sigCh
         log.Printf("Received %s, shutting down...", sig)
         cancel()
+
+        // Wait for current execution to finish
+        if executor.IsRunning() {
+            log.Println("Waiting for current execution to finish...")
+            if executor.WaitIdle(30 * time.Second) {
+                log.Println("Execution finished.")
+            } else {
+                log.Println("Timed out waiting, forcing shutdown.")
+                executor.Kill()
+            }
+        }
+
+        queue.Shutdown()
+        log.Println("Shutdown complete.")
     }()
 
     log.Println("Starting devbot...")

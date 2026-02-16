@@ -102,6 +102,22 @@ func (c *ClaudeExecutor) Model() string {
 	return c.model
 }
 
+// WaitIdle blocks until no execution is running or the timeout expires.
+// Returns true if idle, false if timed out.
+func (c *ClaudeExecutor) WaitIdle(timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for {
+		if !c.IsRunning() {
+			return true
+		}
+		select {
+		case <-deadline:
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 func (c *ClaudeExecutor) ExecCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -298,6 +298,26 @@ func TestRouterRouteFileUnauthorized(t *testing.T) {
 	}
 }
 
+func TestRouterRouteDocShare(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.RouteDocShare(context.Background(), "chat1", "user1", "ABC123")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "ABC123") {
+		t.Fatalf("expected doc ID in response, got: %q", msg)
+	}
+	if !strings.Contains(msg, "/doc bind") {
+		t.Fatalf("expected bind hint in response, got: %q", msg)
+	}
+}
+
+func TestRouterRouteDocShareUnauthorized(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.RouteDocShare(context.Background(), "chat1", "hacker", "ABC123")
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no response for unauthorized user")
+	}
+}
+
 func TestRouterWorkRootNotOverwritten(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(filepath.Join(dir, "state.json"))

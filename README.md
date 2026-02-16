@@ -22,6 +22,8 @@ All environment variables use the `DEVBOT_` prefix:
 | `DEVBOT_CLAUDE_MODEL` | No | Default model | `sonnet` |
 | `DEVBOT_CLAUDE_TIMEOUT` | No | Timeout in seconds | `600` |
 | `DEVBOT_STATE_FILE` | No | State file path | `~/.devbot/state.json` |
+| `DEVBOT_BOT_OPEN_ID` | No | Bot's Open ID (for group @mention detection) | — |
+| `DEVBOT_SKIP_BOT_SELF` | No | Ignore bot's own messages | `true` |
 
 ## Run
 
@@ -74,6 +76,13 @@ Send any text message directly to Claude Code. Use `/` prefix for control comman
 - `/sh <cmd>` — Run shell command (via Claude)
 - `/file <path>` — Send project file to chat
 
+**Docs:**
+- `/doc push <path>` — Push Markdown file to new Feishu doc
+- `/doc pull <path>` — Pull Feishu doc content back to local file
+- `/doc bind <path> <url|id>` — Bind local file to existing Feishu doc
+- `/doc unbind <path>` — Remove binding
+- `/doc list` — List all file-to-doc bindings
+
 ## Behavior
 
 - Receives Feishu messages via WebSocket long-connection
@@ -84,3 +93,5 @@ Send any text message directly to Claude Code. Use `/` prefix for control comman
 - Long outputs are split into multiple messages (no truncation)
 - Per-chat message queue ensures sequential execution
 - State persisted to `~/.devbot/state.json`
+- Supports image and file messages (downloaded and saved to work directory)
+- Feishu document share cards are auto-detected for doc binding

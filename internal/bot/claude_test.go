@@ -110,6 +110,34 @@ func TestClaudeExecCountAndDuration(t *testing.T) {
 	}
 }
 
+func TestClaudeExecWaitIdleImmediate(t *testing.T) {
+	exec := NewClaudeExecutor("claude", "sonnet", 30*time.Second)
+	// Not running, should return immediately
+	if !exec.WaitIdle(1 * time.Second) {
+		t.Fatalf("expected WaitIdle to return true when not running")
+	}
+}
+
+func TestClaudeExecWaitIdleTimeout(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+
+	// Start a long-running command in background
+	go exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	time.Sleep(50 * time.Millisecond) // Let it start
+
+	// Should timeout
+	if exec.WaitIdle(200 * time.Millisecond) {
+		t.Fatalf("expected WaitIdle to return false (timeout)")
+	}
+
+	// Cleanup
+	exec.Kill()
+}
+
 func TestClaudeExecCountIncrementsOnError(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")

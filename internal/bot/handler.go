@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
 	"strings"
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -20,6 +21,7 @@ type MessageRouter interface {
 	Route(ctx context.Context, chatID, userID, text string)
 	RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string)
 	RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte)
+	RouteDocShare(ctx context.Context, chatID, userID, docID string)
 }
 
 // Downloader downloads images and files from Feishu.
@@ -34,6 +36,8 @@ type Downloader interface {
 
 const maxImageSize = 10 << 20 // 10 MB
 const maxFileSize = 50 << 20  // 50 MB
+
+var feishuDocURLPattern = regexp.MustCompile(`https?://[a-zA-Z0-9.-]*feishu\.cn/docx/([a-zA-Z0-9]+)`)
 
 type Handler struct {
 	router      MessageRouter
@@ -125,7 +129,24 @@ func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiv
 		if text == "" {
 			return nil
 		}
+		// Detect feishu doc URL shared as plain text
+		if docID := extractDocID(text); docID != "" && !strings.HasPrefix(text, "/") {
+			h.router.RouteDocShare(ctx, chatID, userID, docID)
+			return nil
+		}
 		h.router.Route(ctx, chatID, userID, text)
+
+	case "post":
+		// Rich text messages — extract doc URL if present
+		if docID := extractDocID(env.Event.Message.Content); docID != "" {
+			h.router.RouteDocShare(ctx, chatID, userID, docID)
+		}
+
+	case "interactive":
+		// Interactive cards — extract doc URL if present
+		if docID := extractDocID(env.Event.Message.Content); docID != "" {
+			h.router.RouteDocShare(ctx, chatID, userID, docID)
+		}
 
 	case "image":
 		h.handleImage(ctx, chatID, userID, messageID, env.Event.Message.Content)
@@ -240,4 +261,13 @@ func (h *Handler) cleanMentions(text string, env eventEnvelope) string {
 		text = strings.ReplaceAll(text, m.Key, "")
 	}
 	return strings.TrimSpace(text)
+}
+
+// extractDocID finds the first Feishu doc URL in text and returns the document ID.
+func extractDocID(text string) string {
+	m := feishuDocURLPattern.FindStringSubmatch(text)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
 }

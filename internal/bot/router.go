@@ -176,8 +176,8 @@ System:
 Docs:
   /doc push <path>  -- Push Markdown to Feishu doc
   /doc pull <path>  -- Pull shared doc to project
-  /doc bind <path>  -- Bind file to Feishu doc
-  /doc unbind <path>-- Unbind
+  /doc bind <path> <url|id> -- Bind file to Feishu doc
+  /doc unbind <path>       -- Unbind
   /doc list         -- List bindings
 
 Any other message is sent directly to Claude as a prompt.`
@@ -463,6 +463,45 @@ func findFile(workDir, query string) string {
 	return match
 }
 
+// findDocBinding looks up a doc binding by fuzzy path match. It tries:
+// 1. Exact path (joined with workDir)
+// 2. Case-insensitive substring match on binding keys
+// Returns (filePath, docID) or ("", "") if not found.
+func (r *Router) findDocBinding(workDir, query string) (string, string) {
+	bindings := r.store.DocBindings()
+
+	// Try exact path first
+	if !filepath.IsAbs(query) {
+		exact := filepath.Clean(filepath.Join(workDir, query))
+		if docID, ok := bindings[exact]; ok {
+			return exact, docID
+		}
+	}
+
+	// Fuzzy: case-insensitive substring match on binding keys
+	queryLower := strings.ToLower(query)
+	for path, docID := range bindings {
+		if strings.Contains(strings.ToLower(filepath.Base(path)), queryLower) {
+			return path, docID
+		}
+	}
+	return "", ""
+}
+
+// resolveFilePath resolves a user-supplied path to an absolute path within
+// the work directory. It tries exact match first, then falls back to fuzzy
+// matching via findFile. Returns the resolved path or empty string if not found.
+func resolveFilePath(workDir, query string) string {
+	if filepath.IsAbs(query) {
+		return "" // Reject absolute paths
+	}
+	exact := filepath.Join(workDir, query)
+	if _, err := os.Stat(exact); err == nil {
+		return filepath.Clean(exact)
+	}
+	return findFile(workDir, query)
+}
+
 func (r *Router) cmdDoc(ctx context.Context, chatID, args string) {
 	parts := strings.SplitN(args, " ", 2)
 	sub := ""
@@ -503,11 +542,11 @@ func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
 	}
 
 	session := r.getSession(chatID)
-	filePath := args
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(session.WorkDir, filePath)
+	filePath := resolveFilePath(session.WorkDir, args)
+	if filePath == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("File not found: %s", args))
+		return
 	}
-	filePath = filepath.Clean(filePath)
 
 	root := r.store.WorkRoot()
 	if !strings.HasPrefix(filePath, root) {
@@ -517,7 +556,7 @@ func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("File not found: %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error reading file: %v", err))
 		return
 	}
 
@@ -547,22 +586,15 @@ func (r *Router) cmdDocPull(ctx context.Context, chatID, args string) {
 	}
 
 	session := r.getSession(chatID)
-	filePath := args
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(session.WorkDir, filePath)
+	filePath, docID := r.findDocBinding(session.WorkDir, args)
+	if docID == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("No binding found for %s. Use /doc bind first.", args))
+		return
 	}
-	filePath = filepath.Clean(filePath)
 
 	root := r.store.WorkRoot()
 	if !strings.HasPrefix(filePath, root) {
 		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
-		return
-	}
-
-	bindings := r.store.DocBindings()
-	docID, ok := bindings[filePath]
-	if !ok {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("No binding found for %s. Use /doc bind first.", args))
 		return
 	}
 
@@ -588,11 +620,11 @@ func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) {
 	}
 
 	session := r.getSession(chatID)
-	filePath := parts[0]
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(session.WorkDir, filePath)
+	filePath := resolveFilePath(session.WorkDir, parts[0])
+	if filePath == "" {
+		// For bind, allow binding a not-yet-existing file (exact path)
+		filePath = filepath.Clean(filepath.Join(session.WorkDir, parts[0]))
 	}
-	filePath = filepath.Clean(filePath)
 
 	root := r.store.WorkRoot()
 	if !strings.HasPrefix(filePath, root) {
@@ -614,15 +646,9 @@ func (r *Router) cmdDocUnbind(ctx context.Context, chatID, args string) {
 	}
 
 	session := r.getSession(chatID)
-	filePath := args
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(session.WorkDir, filePath)
-	}
-	filePath = filepath.Clean(filePath)
-
-	root := r.store.WorkRoot()
-	if !strings.HasPrefix(filePath, root) {
-		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+	filePath, docID := r.findDocBinding(session.WorkDir, args)
+	if docID == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("No binding found for %s", args))
 		return
 	}
 
@@ -684,6 +710,13 @@ func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string,
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("File saved to: %s", filePath))
 	prompt := fmt.Sprintf("User sent a file '%s', saved to: %s. Examine or process this file as needed.", fileName, filePath)
 	r.execClaudeQueued(ctx, chatID, session, prompt)
+}
+
+func (r *Router) RouteDocShare(ctx context.Context, chatID, userID, docID string) {
+	if !r.allowedUsers[userID] {
+		return
+	}
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Detected Feishu doc: %s\nUse /doc bind <path> %s to bind it to a local file.\nOr /doc pull <path> if already bound.", docID, docID))
 }
 
 func (r *Router) handlePrompt(ctx context.Context, chatID, text string) {

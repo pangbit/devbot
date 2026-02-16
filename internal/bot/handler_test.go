@@ -20,6 +20,7 @@ type fakeRouter struct {
 	imageName string
 	fileData  []byte
 	fileName  string
+	docID     string
 }
 
 func (f *fakeRouter) Route(_ context.Context, chatID, userID, text string) {
@@ -43,6 +44,13 @@ func (f *fakeRouter) RouteFile(_ context.Context, chatID, userID, fileName strin
 	f.userID = userID
 	f.fileName = fileName
 	f.fileData = fileData
+}
+
+func (f *fakeRouter) RouteDocShare(_ context.Context, chatID, userID, docID string) {
+	f.called = true
+	f.chatID = chatID
+	f.userID = userID
+	f.docID = docID
 }
 
 type fakeDownloader struct {
@@ -368,5 +376,98 @@ func TestHandleMessage_FileNoDownloader(t *testing.T) {
 
 	if router.called {
 		t.Fatalf("expected router not called when downloader is nil")
+	}
+}
+
+func TestHandleMessage_DocURLInText(t *testing.T) {
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "text",
+		`{"text":"https://abc.feishu.cn/docx/DOC123abc"}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected RouteDocShare to be called")
+	}
+	if router.docID != "DOC123abc" {
+		t.Fatalf("expected docID 'DOC123abc', got %q", router.docID)
+	}
+}
+
+func TestHandleMessage_DocURLInTextWithCommand(t *testing.T) {
+	// A /doc bind command containing a URL should go through Route, not RouteDocShare
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "text",
+		`{"text":"/doc bind readme https://abc.feishu.cn/docx/DOC123"}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected Route to be called")
+	}
+	if router.docID != "" {
+		t.Fatalf("expected docID empty (routed as command), got %q", router.docID)
+	}
+	if router.text != "/doc bind readme https://abc.feishu.cn/docx/DOC123" {
+		t.Fatalf("expected full text routed, got %q", router.text)
+	}
+}
+
+func TestHandleMessage_PostWithDocURL(t *testing.T) {
+	postContent := `{"content":[[{"tag":"a","href":"https://test.feishu.cn/docx/POST456","text":"My Document"}]]}`
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected RouteDocShare to be called for post with doc URL")
+	}
+	if router.docID != "POST456" {
+		t.Fatalf("expected docID 'POST456', got %q", router.docID)
+	}
+}
+
+func TestHandleMessage_PostWithoutDocURL(t *testing.T) {
+	postContent := `{"content":[[{"tag":"text","text":"just some text"}]]}`
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for post without doc URL")
+	}
+}
+
+func TestExtractDocID(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://abc.feishu.cn/docx/ABC123", "ABC123"},
+		{"https://feishu.cn/docx/XYZ789?query=1", "XYZ789"},
+		{"check this https://test.feishu.cn/docx/DOC456 out", "DOC456"},
+		{"no url here", ""},
+		{"https://abc.feishu.cn/wiki/something", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := extractDocID(tt.input)
+		if got != tt.want {
+			t.Errorf("extractDocID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }

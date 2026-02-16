@@ -403,3 +403,89 @@ func TestDoc_NoSubcommand(t *testing.T) {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
+
+func TestDocPush_FuzzyPath(t *testing.T) {
+	fake := &fakeDocPusher{
+		returnDocID:  "doc_fuzzy",
+		returnDocURL: "https://feishu.cn/docx/doc_fuzzy",
+	}
+	r, sender, _ := newTestRouterWithDoc(t, fake)
+
+	// "readme" should fuzzy-match "README.md"
+	r.Route(context.Background(), "chat1", "user1", "/doc push readme")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "doc_fuzzy") {
+		t.Fatalf("expected fuzzy match to work for /doc push, got: %q", msg)
+	}
+	if fake.createdTitle != "README.md" {
+		t.Fatalf("expected title 'README.md', got %q", fake.createdTitle)
+	}
+}
+
+func TestDocBind_FuzzyPath(t *testing.T) {
+	fake := &fakeDocPusher{}
+	r, sender, dir := newTestRouterWithDoc(t, fake)
+
+	// Bind using fuzzy path
+	r.Route(context.Background(), "chat1", "user1", "/doc bind readme DOC999")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "DOC999") {
+		t.Fatalf("expected bind confirmation, got: %q", msg)
+	}
+
+	// Verify binding was created with resolved path
+	bindings := r.store.DocBindings()
+	expectedPath := filepath.Join(dir, "README.md")
+	if bindings[expectedPath] != "DOC999" {
+		t.Fatalf("expected binding for %s, got bindings: %v", expectedPath, bindings)
+	}
+}
+
+func TestDocPull_FuzzyBinding(t *testing.T) {
+	fake := &fakeDocPusher{
+		pullContent: "pulled content",
+	}
+	r, sender, dir := newTestRouterWithDoc(t, fake)
+
+	// Create a binding with full path
+	fullPath := filepath.Join(dir, "README.md")
+	r.store.SetDocBinding(fullPath, "DOC_PULL")
+	r.store.Save()
+
+	// Pull using fuzzy path "readme"
+	r.Route(context.Background(), "chat1", "user1", "/doc pull readme")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Pulled") {
+		t.Fatalf("expected pull confirmation, got: %q", msg)
+	}
+
+	// Verify file was written
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("expected file to exist: %v", err)
+	}
+	if string(data) != "pulled content" {
+		t.Fatalf("expected 'pulled content', got %q", string(data))
+	}
+}
+
+func TestDocUnbind_FuzzyBinding(t *testing.T) {
+	fake := &fakeDocPusher{}
+	r, sender, dir := newTestRouterWithDoc(t, fake)
+
+	fullPath := filepath.Join(dir, "README.md")
+	r.store.SetDocBinding(fullPath, "DOC_UNBIND")
+	r.store.Save()
+
+	// Unbind using fuzzy path
+	r.Route(context.Background(), "chat1", "user1", "/doc unbind readme")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Unbound") {
+		t.Fatalf("expected unbind confirmation, got: %q", msg)
+	}
+
+	bindings := r.store.DocBindings()
+	if _, ok := bindings[fullPath]; ok {
+		t.Fatalf("expected binding to be removed")
+	}
+}
