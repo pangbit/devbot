@@ -18,9 +18,10 @@ type Router struct {
 	startTime    time.Time
 	queue        *MessageQueue
 	docSyncer    DocPusher
+	ctx          context.Context
 }
 
-func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUsers map[string]bool, workRoot string, docSyncer DocPusher) *Router {
+func NewRouter(ctx context.Context, executor *ClaudeExecutor, store *Store, sender Sender, allowedUsers map[string]bool, workRoot string, docSyncer DocPusher) *Router {
 	if store.WorkRoot() == "" {
 		store.SetWorkRoot(workRoot)
 	}
@@ -31,6 +32,7 @@ func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUse
 		allowedUsers: allowedUsers,
 		startTime:    time.Now(),
 		docSyncer:    docSyncer,
+		ctx:          ctx,
 	}
 }
 
@@ -130,7 +132,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	}
 }
 
-func (r *Router) getSession(chatID string) *Session {
+func (r *Router) getSession(chatID string) Session {
 	return r.store.GetSession(chatID, r.store.WorkRoot(), r.executor.Model())
 }
 
@@ -261,8 +263,24 @@ func (r *Router) cmdRoot(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "Current root: "+r.store.WorkRoot())
 		return
 	}
-	if _, err := os.Stat(args); err != nil {
+	if !filepath.IsAbs(args) {
+		r.sender.SendText(ctx, chatID, "Root must be an absolute path.")
+		return
+	}
+	cleaned := filepath.Clean(args)
+	if cleaned == "/" || strings.HasPrefix(cleaned, "/etc") ||
+		strings.HasPrefix(cleaned, "/var") || strings.HasPrefix(cleaned, "/usr") ||
+		strings.HasPrefix(cleaned, "/sys") || strings.HasPrefix(cleaned, "/proc") {
+		r.sender.SendText(ctx, chatID, "Cannot set root to a system directory.")
+		return
+	}
+	info, err := os.Stat(args)
+	if err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Directory not found: %s", args))
+		return
+	}
+	if !info.IsDir() {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Not a directory: %s", args))
 		return
 	}
 	r.store.SetWorkRoot(args)
@@ -275,7 +293,7 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "Usage: /cd <directory>")
 		return
 	}
-	session := r.getSession(chatID)
+	r.getSession(chatID) // ensure session exists
 	root := r.store.WorkRoot()
 
 	var target string
@@ -296,18 +314,22 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Directory not found: %s", target))
 		return
 	}
-	session.WorkDir = target
+	r.store.UpdateSession(chatID, func(s *Session) {
+		s.WorkDir = target
+	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "Changed to: "+target)
 }
 
 func (r *Router) cmdNewSession(ctx context.Context, chatID string) {
-	session := r.getSession(chatID)
-	if session.ClaudeSessionID != "" {
-		session.History = append(session.History, session.ClaudeSessionID)
-	}
-	session.ClaudeSessionID = ""
-	session.LastOutput = ""
+	r.getSession(chatID) // ensure session exists
+	r.store.UpdateSession(chatID, func(s *Session) {
+		if s.ClaudeSessionID != "" {
+			s.History = append(s.History, s.ClaudeSessionID)
+		}
+		s.ClaudeSessionID = ""
+		s.LastOutput = ""
+	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "New session started.")
 }
@@ -333,12 +355,14 @@ func (r *Router) cmdSwitch(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "Usage: /switch <session-id>")
 		return
 	}
-	session := r.getSession(chatID)
-	if session.ClaudeSessionID != "" {
-		session.History = append(session.History, session.ClaudeSessionID)
-	}
-	session.ClaudeSessionID = args
-	session.LastOutput = ""
+	r.getSession(chatID) // ensure session exists
+	r.store.UpdateSession(chatID, func(s *Session) {
+		if s.ClaudeSessionID != "" {
+			s.History = append(s.History, s.ClaudeSessionID)
+		}
+		s.ClaudeSessionID = args
+		s.LastOutput = ""
+	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "Switched to session: "+args)
 }
@@ -356,22 +380,28 @@ func (r *Router) cmdModel(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "Current model: "+r.executor.Model())
 		return
 	}
-	session := r.getSession(chatID)
-	session.Model = args
+	r.getSession(chatID) // ensure session exists
+	r.store.UpdateSession(chatID, func(s *Session) {
+		s.Model = args
+	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "Model set to: "+args)
 }
 
 func (r *Router) cmdYolo(ctx context.Context, chatID string) {
-	session := r.getSession(chatID)
-	session.PermissionMode = "yolo"
+	r.getSession(chatID) // ensure session exists
+	r.store.UpdateSession(chatID, func(s *Session) {
+		s.PermissionMode = "yolo"
+	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "YOLO mode enabled. Claude will execute without restrictions.")
 }
 
 func (r *Router) cmdSafe(ctx context.Context, chatID string) {
-	session := r.getSession(chatID)
-	session.PermissionMode = "safe"
+	r.getSession(chatID) // ensure session exists
+	r.store.UpdateSession(chatID, func(s *Session) {
+		s.PermissionMode = "safe"
+	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "Safe mode restored.")
 }
@@ -392,7 +422,7 @@ func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 		return
 	}
 	prompt := "Please summarize the following output concisely:\n\n" + session.LastOutput
-	r.execClaudeQueued(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
 func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
@@ -400,15 +430,15 @@ func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
 		r.sender.SendText(ctx, chatID, "Usage: /commit <message>")
 		return
 	}
-	session := r.getSession(chatID)
-	prompt := fmt.Sprintf("Stage all changes with `git add -A`, then commit with the message: %s\nOnly show the command output, no explanation.", msg)
-	r.execClaudeQueued(ctx, chatID, session, prompt)
+	r.getSession(chatID) // ensure session exists
+	prompt := fmt.Sprintf("Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then commit with the message: %s\nOnly show the command output, no explanation.", msg)
+	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
 func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
-	session := r.getSession(chatID)
+	r.getSession(chatID) // ensure session exists
 	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
-	r.execClaudeQueued(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
@@ -416,9 +446,9 @@ func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "Usage: /sh <command>")
 		return
 	}
-	session := r.getSession(chatID)
+	r.getSession(chatID) // ensure session exists
 	prompt := fmt.Sprintf("Run `%s` in the current directory and return the output. Only show the command output, no explanation.", args)
-	r.execClaudeQueued(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
 func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
@@ -450,9 +480,14 @@ func findFile(workDir, query string) string {
 	}
 	query = strings.ToLower(query)
 	var match string
+	count := 0
 	filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
+		}
+		count++
+		if count > 10000 {
+			return filepath.SkipAll
 		}
 		if strings.Contains(strings.ToLower(info.Name()), query) {
 			match = path
@@ -681,7 +716,10 @@ func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageDat
 
 	// Save image to work directory
 	imgDir := filepath.Join(session.WorkDir, ".devbot-images")
-	os.MkdirAll(imgDir, 0755)
+	if err := os.MkdirAll(imgDir, 0755); err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to create image directory: %v", err))
+		return
+	}
 	imgPath := filepath.Join(imgDir, filepath.Base(fileName))
 	if err := os.WriteFile(imgPath, imageData, 0644); err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to save image: %v", err))
@@ -690,7 +728,7 @@ func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageDat
 
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("Image saved to: %s", imgPath))
 	prompt := fmt.Sprintf("User sent an image, saved to: %s. Describe or process this image as needed.", imgPath)
-	r.execClaudeQueued(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
 func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte) {
@@ -709,7 +747,7 @@ func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string,
 
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("File saved to: %s", filePath))
 	prompt := fmt.Sprintf("User sent a file '%s', saved to: %s. Examine or process this file as needed.", fileName, filePath)
-	r.execClaudeQueued(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
 func (r *Router) RouteDocShare(ctx context.Context, chatID, userID, docID string) {
@@ -720,38 +758,42 @@ func (r *Router) RouteDocShare(ctx context.Context, chatID, userID, docID string
 }
 
 func (r *Router) handlePrompt(ctx context.Context, chatID, text string) {
-	session := r.getSession(chatID)
-	r.execClaudeQueued(ctx, chatID, session, text)
+	r.getSession(chatID) // ensure session exists
+	r.execClaudeQueued(ctx, chatID, text)
 }
 
-func (r *Router) execClaudeQueued(ctx context.Context, chatID string, session *Session, prompt string) {
+func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt string) {
 	if r.queue != nil {
 		pending := r.queue.PendingCount(chatID)
 		if pending > 0 {
 			r.sender.SendText(ctx, chatID, fmt.Sprintf("Queued (position %d)...", pending+1))
 		}
-		r.queue.Enqueue(chatID, func() {
-			r.execClaude(context.Background(), chatID, session, prompt)
-		})
+		if err := r.queue.Enqueue(chatID, func() {
+			r.execClaude(r.ctx, chatID, prompt)
+		}); err != nil {
+			r.sender.SendText(ctx, chatID, "Queue is full, please try again later.")
+		}
 	} else {
-		r.execClaude(ctx, chatID, session, prompt)
+		r.execClaude(ctx, chatID, prompt)
 	}
 }
 
-func (r *Router) execClaude(ctx context.Context, chatID string, session *Session, prompt string) {
+func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	r.sender.SendText(ctx, chatID, "Executing...")
 
-	permMode := session.PermissionMode
+	workDir, sessionID, permMode, model := r.store.SessionExecParams(chatID)
 	if permMode == "" {
 		permMode = "safe"
 	}
-	output, err := r.executor.Exec(ctx, prompt, session.WorkDir, session.ClaudeSessionID, permMode, session.Model)
+	output, err := r.executor.Exec(ctx, prompt, workDir, sessionID, permMode, model)
 	if err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
 		return
 	}
 
-	session.LastOutput = output
+	r.store.UpdateSession(chatID, func(s *Session) {
+		s.LastOutput = output
+	})
 	r.save()
 
 	r.sender.SendTextChunked(ctx, chatID, output)

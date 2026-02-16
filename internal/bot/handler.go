@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -195,7 +196,16 @@ func (h *Handler) handleImage(ctx context.Context, chatID, userID, messageID, ra
 		return
 	}
 
-	h.router.RouteImage(ctx, chatID, userID, data, content.ImageKey+".png")
+	ext := ".png"
+	switch ct := http.DetectContentType(data); {
+	case strings.HasPrefix(ct, "image/jpeg"):
+		ext = ".jpg"
+	case strings.HasPrefix(ct, "image/gif"):
+		ext = ".gif"
+	case strings.HasPrefix(ct, "image/webp"):
+		ext = ".webp"
+	}
+	h.router.RouteImage(ctx, chatID, userID, data, content.ImageKey+ext)
 }
 
 func (h *Handler) handleFile(ctx context.Context, chatID, userID, messageID, rawContent string) {

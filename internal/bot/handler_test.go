@@ -452,6 +452,27 @@ func TestHandleMessage_PostWithoutDocURL(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_ImageJPEGExtension(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":"img_jpeg"}`, "msg_003", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	// JPEG magic bytes: ff d8 ff
+	jpegData := append([]byte{0xff, 0xd8, 0xff, 0xe0}, make([]byte, 100)...)
+	dl := &fakeDownloader{imageData: jpegData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called")
+	}
+	if router.imageName != "img_jpeg.jpg" {
+		t.Fatalf("expected .jpg extension, got: %q", router.imageName)
+	}
+}
+
 func TestExtractDocID(t *testing.T) {
 	tests := []struct {
 		input string

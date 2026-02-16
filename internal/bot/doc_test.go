@@ -94,7 +94,7 @@ func newTestRouterWithDoc(t *testing.T, dp DocPusher) (*Router, *spySender, stri
 	}
 	sender := &spySender{}
 	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
-	r := NewRouter(exec, store, sender, map[string]bool{"user1": true}, dir, dp)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, dp)
 	return r, sender, dir
 }
 

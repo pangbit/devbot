@@ -19,13 +19,15 @@ func TestQueueSequentialExecution(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			i := i
 			wg.Add(1)
-			q.Enqueue("chat1", func() {
+			if err := q.Enqueue("chat1", func() {
 				defer wg.Done()
 				time.Sleep(10 * time.Millisecond)
 				mu.Lock()
 				order = append(order, i)
 				mu.Unlock()
-			})
+			}); err != nil {
+				wg.Done()
+			}
 		}
 		wg.Wait()
 		close(done)
@@ -59,7 +61,7 @@ func TestQueueDifferentChatsParallel(t *testing.T) {
 	for _, chatID := range []string{"chat1", "chat2"} {
 		chatID := chatID
 		wg.Add(1)
-		q.Enqueue(chatID, func() {
+		if err := q.Enqueue(chatID, func() {
 			defer wg.Done()
 			cur := atomic.AddInt32(&running, 1)
 			for {
@@ -74,7 +76,10 @@ func TestQueueDifferentChatsParallel(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 			atomic.AddInt32(&running, -1)
-		})
+		}); err != nil {
+			wg.Done()
+			t.Fatalf("Enqueue failed: %v", err)
+		}
 	}
 	wg.Wait()
 
@@ -87,19 +92,22 @@ func TestQueueShutdown(t *testing.T) {
 	q := NewMessageQueue()
 
 	done := make(chan struct{})
-	q.Enqueue("chat1", func() {
-		// This task runs before shutdown
+	if err := q.Enqueue("chat1", func() {
 		close(done)
-	})
+	}); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
 	<-done
 
 	q.Shutdown()
 
 	// After shutdown, new enqueue should work on a fresh worker
 	done2 := make(chan struct{})
-	q.Enqueue("chat1", func() {
+	if err := q.Enqueue("chat1", func() {
 		close(done2)
-	})
+	}); err != nil {
+		t.Fatalf("Enqueue after shutdown failed: %v", err)
+	}
 
 	select {
 	case <-done2:
@@ -114,14 +122,18 @@ func TestQueuePendingCount(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	q.Enqueue("chat1", func() {
+	if err := q.Enqueue("chat1", func() {
 		close(started)
 		<-release
-	})
+	}); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
 
 	<-started
 
-	q.Enqueue("chat1", func() {})
+	if err := q.Enqueue("chat1", func() {}); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
 
 	count := q.PendingCount("chat1")
 	if count < 1 {
@@ -130,4 +142,35 @@ func TestQueuePendingCount(t *testing.T) {
 
 	close(release)
 	time.Sleep(100 * time.Millisecond)
+}
+
+func TestQueueEnqueueFull(t *testing.T) {
+	q := NewMessageQueue()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	// Block the worker
+	if err := q.Enqueue("chat1", func() {
+		close(started)
+		<-release
+	}); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	<-started
+
+	// Fill the buffer (100 items)
+	for i := 0; i < 100; i++ {
+		if err := q.Enqueue("chat1", func() {}); err != nil {
+			t.Fatalf("Enqueue %d failed unexpectedly: %v", i, err)
+		}
+	}
+
+	// Next enqueue should fail (buffer full + worker blocked)
+	err := q.Enqueue("chat1", func() {})
+	if err == nil {
+		t.Fatalf("expected error when queue is full")
+	}
+
+	close(release)
 }

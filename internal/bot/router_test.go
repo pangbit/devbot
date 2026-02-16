@@ -46,7 +46,7 @@ func newTestRouter(t *testing.T) (*Router, *spySender) {
 	}
 	sender := &spySender{}
 	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
-	r := NewRouter(exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
 	return r, sender
 }
 
@@ -327,7 +327,7 @@ func TestRouterWorkRootNotOverwritten(t *testing.T) {
 	store.SetWorkRoot("/existing/root")
 	sender := &spySender{}
 	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
-	NewRouter(exec, store, sender, map[string]bool{"user1": true}, "/new/root", nil)
+	NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, "/new/root", nil)
 	if store.WorkRoot() != "/existing/root" {
 		t.Fatalf("expected WorkRoot to remain /existing/root, got %q", store.WorkRoot())
 	}

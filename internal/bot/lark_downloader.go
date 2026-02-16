@@ -38,7 +38,7 @@ func (d *LarkDownloader) DownloadImage(ctx context.Context, messageID, imageKey 
 		return nil, fmt.Errorf("lark API failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 
-	return io.NopCloser(resp.File), nil
+	return asReadCloser(resp.File), nil
 }
 
 // DownloadFile downloads a file from a message using the MessageResource API.
@@ -58,5 +58,16 @@ func (d *LarkDownloader) DownloadFile(ctx context.Context, messageID, fileKey st
 		return nil, "", fmt.Errorf("lark API failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 
-	return io.NopCloser(resp.File), resp.FileName, nil
+	return asReadCloser(resp.File), resp.FileName, nil
+}
+
+// asReadCloser returns r as io.ReadCloser. If r already implements
+// io.ReadCloser it is returned directly to avoid double-wrapping
+// (and leaking the underlying resource). Otherwise it is wrapped
+// with io.NopCloser.
+func asReadCloser(r io.Reader) io.ReadCloser {
+	if rc, ok := r.(io.ReadCloser); ok {
+		return rc
+	}
+	return io.NopCloser(r)
 }

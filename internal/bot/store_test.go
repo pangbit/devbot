@@ -100,11 +100,20 @@ func TestStoreGetSession(t *testing.T) {
 		t.Fatalf("expected Model sonnet, got %q", sess.Model)
 	}
 
-	// GetSession returns existing session
+	// Mutating returned copy does NOT affect store
 	sess.Model = "opus"
 	sess2 := s.GetSession("chat1", "/other", "haiku")
-	if sess2.Model != "opus" {
-		t.Fatalf("expected existing session with Model opus, got %q", sess2.Model)
+	if sess2.Model != "sonnet" {
+		t.Fatalf("expected existing session with Model sonnet (unchanged), got %q", sess2.Model)
+	}
+
+	// UpdateSession mutates the stored session
+	s.UpdateSession("chat1", func(s *Session) {
+		s.Model = "opus"
+	})
+	sess3 := s.GetSession("chat1", "/other", "haiku")
+	if sess3.Model != "opus" {
+		t.Fatalf("expected Model opus after UpdateSession, got %q", sess3.Model)
 	}
 }
 

@@ -49,12 +49,16 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start claude: %w", err)
+	}
+
 	c.mu.Lock()
 	c.running = cmd
 	c.mu.Unlock()
 
 	start := time.Now()
-	err := cmd.Run()
+	err := cmd.Wait()
 	duration := time.Since(start)
 
 	c.mu.Lock()
@@ -78,7 +82,7 @@ func (c *ClaudeExecutor) Kill() error {
 	cmd := c.running
 	c.mu.Unlock()
 
-	if cmd == nil || cmd.Process == nil {
+	if cmd == nil {
 		return fmt.Errorf("no running process")
 	}
 	return cmd.Process.Kill()

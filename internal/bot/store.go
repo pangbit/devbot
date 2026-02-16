@@ -61,8 +61,10 @@ func (s *Store) State() *State {
 	return s.state
 }
 
-// GetSession returns a session for chatID, creating one if needed with defaults.
-func (s *Store) GetSession(chatID, defaultWorkDir, defaultModel string) *Session {
+// GetSession returns a snapshot copy of the session for chatID, creating one
+// if needed with defaults. The returned value is safe to read without locks.
+// To mutate session fields, use UpdateSession.
+func (s *Store) GetSession(chatID, defaultWorkDir, defaultModel string) Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := s.state.Chats[chatID]
@@ -73,7 +75,10 @@ func (s *Store) GetSession(chatID, defaultWorkDir, defaultModel string) *Session
 		}
 		s.state.Chats[chatID] = sess
 	}
-	return sess
+	// Return a value copy — callers get a consistent snapshot
+	cp := *sess
+	cp.History = append([]string(nil), sess.History...)
+	return cp
 }
 
 func (s *Store) WorkRoot() string {
@@ -111,14 +116,34 @@ func (s *Store) RemoveDocBinding(filePath string) {
 	delete(s.state.DocBindings, filePath)
 }
 
-func (s *Store) Save() error {
+// UpdateSession runs fn with the session for chatID under the write lock.
+// The session must already exist (via GetSession).
+func (s *Store) UpdateSession(chatID string, fn func(*Session)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess, ok := s.state.Chats[chatID]; ok {
+		fn(sess)
+	}
+}
+
+// SessionExecParams returns execution parameters for a session under read lock.
+func (s *Store) SessionExecParams(chatID string) (workDir, sessionID, permMode, model string) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess := s.state.Chats[chatID]
+	if sess == nil {
+		return
+	}
+	return sess.WorkDir, sess.ClaudeSessionID, sess.PermissionMode, sess.Model
+}
+
+func (s *Store) Save() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, err := json.MarshalIndent(s.state, "", "  ")
-	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	// File I/O doesn't need the lock
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
