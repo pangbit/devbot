@@ -3,6 +3,9 @@ package main
 import (
     "context"
     "log"
+    "os"
+    "os/signal"
+    "syscall"
     "time"
 
     lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -33,7 +36,19 @@ func main() {
     router := bot.NewRouter(executor, store, sender, cfg.AllowedUserIDs, cfg.WorkRoot)
     handler := bot.NewHandler(router, cfg.SkipBotSelf, "")
 
-    if err := bot.Run(context.Background(), cfg, handler, nil); err != nil {
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+
+    go func() {
+        sigCh := make(chan os.Signal, 1)
+        signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+        sig := <-sigCh
+        log.Printf("Received %s, shutting down...", sig)
+        cancel()
+    }()
+
+    log.Println("Starting devbot...")
+    if err := bot.Run(ctx, cfg, handler, nil); err != nil {
         log.Fatal(err)
     }
 }
