@@ -83,6 +83,31 @@ func TestQueueDifferentChatsParallel(t *testing.T) {
 	}
 }
 
+func TestQueueShutdown(t *testing.T) {
+	q := NewMessageQueue()
+
+	done := make(chan struct{})
+	q.Enqueue("chat1", func() {
+		// This task runs before shutdown
+		close(done)
+	})
+	<-done
+
+	q.Shutdown()
+
+	// After shutdown, new enqueue should work on a fresh worker
+	done2 := make(chan struct{})
+	q.Enqueue("chat1", func() {
+		close(done2)
+	})
+
+	select {
+	case <-done2:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: task should run after shutdown and re-enqueue")
+	}
+}
+
 func TestQueuePendingCount(t *testing.T) {
 	q := NewMessageQueue()
 

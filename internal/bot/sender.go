@@ -2,6 +2,7 @@ package bot
 
 import (
     "context"
+    "unicode/utf8"
 
     lark "github.com/larksuite/oapi-sdk-go/v3"
     larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -49,9 +50,17 @@ func SplitMessage(text string, maxLen int) []string {
 			chunks = append(chunks, text)
 			break
 		}
+
+		// Find a good cut point within maxLen bytes
 		cutAt := maxLen
+		// Don't cut in the middle of a UTF-8 character
+		for cutAt > 0 && cutAt < len(text) && !utf8.RuneStart(text[cutAt]) {
+			cutAt--
+		}
+
+		// Try to find a newline to split at
 		lastNewline := -1
-		for i := 0; i < maxLen && i < len(text); i++ {
+		for i := 0; i < cutAt; i++ {
 			if text[i] == '\n' {
 				lastNewline = i + 1
 			}
@@ -59,6 +68,7 @@ func SplitMessage(text string, maxLen int) []string {
 		if lastNewline > 0 {
 			cutAt = lastNewline
 		}
+
 		chunks = append(chunks, text[:cutAt])
 		text = text[cutAt:]
 	}

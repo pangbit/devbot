@@ -19,7 +19,9 @@ type Router struct {
 }
 
 func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUsers map[string]bool, workRoot string) *Router {
-	store.State().WorkRoot = workRoot
+	if store.WorkRoot() == "" {
+		store.SetWorkRoot(workRoot)
+	}
 	return &Router{
 		executor:     executor,
 		store:        store,
@@ -120,16 +122,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 }
 
 func (r *Router) getSession(chatID string) *Session {
-	state := r.store.State()
-	s := state.Chats[chatID]
-	if s == nil {
-		s = &Session{
-			WorkDir: state.WorkRoot,
-			Model:   r.executor.Model(),
-		}
-		state.Chats[chatID] = s
-	}
-	return s
+	return r.store.GetSession(chatID, r.store.WorkRoot(), r.executor.Model())
 }
 
 func (r *Router) cmdHelp(ctx context.Context, chatID string) {
@@ -218,7 +211,7 @@ func (r *Router) cmdPwd(ctx context.Context, chatID string) {
 }
 
 func (r *Router) cmdLs(ctx context.Context, chatID string) {
-	root := r.store.State().WorkRoot
+	root := r.store.WorkRoot()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
@@ -239,14 +232,14 @@ func (r *Router) cmdLs(ctx context.Context, chatID string) {
 
 func (r *Router) cmdRoot(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Current root: "+r.store.State().WorkRoot)
+		r.sender.SendText(ctx, chatID, "Current root: "+r.store.WorkRoot())
 		return
 	}
 	if _, err := os.Stat(args); err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Directory not found: %s", args))
 		return
 	}
-	r.store.State().WorkRoot = args
+	r.store.SetWorkRoot(args)
 	r.store.Save()
 	r.sender.SendText(ctx, chatID, "Root set to: "+args)
 }
@@ -257,7 +250,7 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		return
 	}
 	session := r.getSession(chatID)
-	root := r.store.State().WorkRoot
+	root := r.store.WorkRoot()
 
 	var target string
 	if filepath.IsAbs(args) {
@@ -266,6 +259,12 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		target = filepath.Join(root, args)
 	}
 	target = filepath.Clean(target)
+
+	// Prevent path traversal outside work root
+	if !strings.HasPrefix(target, root) {
+		r.sender.SendText(ctx, chatID, "Cannot cd outside of work root: "+root)
+		return
+	}
 
 	if _, err := os.Stat(target); err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Directory not found: %s", target))
@@ -333,7 +332,6 @@ func (r *Router) cmdModel(ctx context.Context, chatID, args string) {
 	}
 	session := r.getSession(chatID)
 	session.Model = args
-	r.executor.SetModel(args)
 	r.store.Save()
 	r.sender.SendText(ctx, chatID, "Model set to: "+args)
 }
@@ -457,12 +455,9 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, session *S
 		if pending > 0 {
 			r.sender.SendText(ctx, chatID, fmt.Sprintf("Queued (position %d)...", pending+1))
 		}
-		done := make(chan struct{})
 		r.queue.Enqueue(chatID, func() {
-			defer close(done)
 			r.execClaude(ctx, chatID, session, prompt)
 		})
-		<-done
 	} else {
 		r.execClaude(ctx, chatID, session, prompt)
 	}
@@ -475,7 +470,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, session *Session
 	if permMode == "" {
 		permMode = "safe"
 	}
-	output, err := r.executor.Exec(ctx, prompt, session.WorkDir, session.ClaudeSessionID, permMode)
+	output, err := r.executor.Exec(ctx, prompt, session.WorkDir, session.ClaudeSessionID, permMode, session.Model)
 	if err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
 		return

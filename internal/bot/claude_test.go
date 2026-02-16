@@ -15,7 +15,7 @@ func TestClaudeExecRunsCommand(t *testing.T) {
 	os.WriteFile(script, []byte("#!/bin/sh\necho \"Hello from Claude\"\n"), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
-	output, err := exec.Exec(context.Background(), "test prompt", dir, "", "safe")
+	output, err := exec.Exec(context.Background(), "test prompt", dir, "", "safe", "sonnet")
 	if err != nil {
 		t.Fatalf("Exec error: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestClaudeExecTimeout(t *testing.T) {
 	os.WriteFile(script, []byte("#!/bin/sh\nsleep 10\n"), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 100*time.Millisecond)
-	_, err := exec.Exec(context.Background(), "test", dir, "", "safe")
+	_, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
 	if err == nil {
 		t.Fatalf("expected timeout error")
 	}
@@ -42,7 +42,7 @@ func TestClaudeExecWithSessionID(t *testing.T) {
 	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\"\n"), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
-	output, err := exec.Exec(context.Background(), "hello", dir, "ses123", "safe")
+	output, err := exec.Exec(context.Background(), "hello", dir, "ses123", "safe", "sonnet")
 	if err != nil {
 		t.Fatalf("Exec error: %v", err)
 	}

@@ -25,13 +25,13 @@ func NewClaudeExecutor(claudePath, model string, timeout time.Duration) *ClaudeE
 	}
 }
 
-func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, permissionMode string) (string, error) {
+func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, permissionMode, model string) (string, error) {
 	args := []string{"-p", prompt, "--output-format", "text"}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}
-	if c.model != "" {
-		args = append(args, "--model", c.model)
+	if model != "" {
+		args = append(args, "--model", model)
 	}
 	if permissionMode == "yolo" {
 		args = append(args, "--dangerously-skip-permissions")

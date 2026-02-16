@@ -1,6 +1,9 @@
 package bot
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 func TestBuildSendMessageBody(t *testing.T) {
 	body := buildSendMessageBody("oc_test_chat", "hello")
@@ -54,5 +57,24 @@ func TestSplitMessage_SplitsAtNewline(t *testing.T) {
 	}
 	if reassembled != text {
 		t.Fatalf("reassembled mismatch")
+	}
+}
+
+func TestSplitMessage_CJK(t *testing.T) {
+	// Each CJK character is 3 bytes in UTF-8; test that we never cut mid-rune
+	text := "你好世界这是一个测试消息用来验证UTF8分割"
+	chunks := SplitMessage(text, 10)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	reassembled := ""
+	for _, c := range chunks {
+		if !utf8.ValidString(c) {
+			t.Fatalf("chunk contains invalid UTF-8: %q", c)
+		}
+		reassembled += c
+	}
+	if reassembled != text {
+		t.Fatalf("reassembled CJK text does not match original")
 	}
 }

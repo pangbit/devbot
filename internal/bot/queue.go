@@ -51,3 +51,13 @@ func (q *MessageQueue) PendingCount(chatID string) int {
 	}
 	return int(atomic.LoadInt32(cnt))
 }
+
+func (q *MessageQueue) Shutdown() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, ch := range q.queues {
+		close(ch)
+	}
+	q.queues = make(map[string]chan func())
+	q.counts = make(map[string]*int32)
+}

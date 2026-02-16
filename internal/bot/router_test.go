@@ -203,3 +203,27 @@ func TestRouterFileNotFound(t *testing.T) {
 		t.Fatalf("expected not found, got: %q", msg)
 	}
 }
+
+func TestRouterCdPathTraversal(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/cd ../../etc")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Cannot cd outside") {
+		t.Fatalf("expected path traversal rejection, got: %q", msg)
+	}
+}
+
+func TestRouterWorkRootNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	store.SetWorkRoot("/existing/root")
+	sender := &spySender{}
+	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	NewRouter(exec, store, sender, map[string]bool{"user1": true}, "/new/root")
+	if store.WorkRoot() != "/existing/root" {
+		t.Fatalf("expected WorkRoot to remain /existing/root, got %q", store.WorkRoot())
+	}
+}
