@@ -34,6 +34,8 @@ func main() {
     )
 
     router := bot.NewRouter(executor, store, sender, cfg.AllowedUserIDs, cfg.WorkRoot)
+    queue := bot.NewMessageQueue()
+    router.SetQueue(queue)
     handler := bot.NewHandler(router, cfg.SkipBotSelf, "")
 
     ctx, cancel := context.WithCancel(context.Background())

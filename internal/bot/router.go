@@ -29,6 +29,10 @@ func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUse
 	}
 }
 
+func (r *Router) SetQueue(q *MessageQueue) {
+	r.queue = q
+}
+
 func (r *Router) Route(ctx context.Context, chatID, userID, text string) {
 	if !r.allowedUsers[userID] {
 		return
@@ -364,13 +368,13 @@ func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 		return
 	}
 	prompt := "Please summarize the following output concisely:\n\n" + session.LastOutput
-	r.execClaude(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, session, prompt)
 }
 
 func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 	session := r.getSession(chatID)
 	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
-	r.execClaude(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, session, prompt)
 }
 
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
@@ -380,7 +384,7 @@ func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	}
 	session := r.getSession(chatID)
 	prompt := fmt.Sprintf("Run `%s` in the current directory and return the output. Only show the command output, no explanation.", args)
-	r.execClaude(ctx, chatID, session, prompt)
+	r.execClaudeQueued(ctx, chatID, session, prompt)
 }
 
 func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
@@ -434,7 +438,24 @@ func (r *Router) cmdDoc(ctx context.Context, chatID, args string) {
 
 func (r *Router) handlePrompt(ctx context.Context, chatID, text string) {
 	session := r.getSession(chatID)
-	r.execClaude(ctx, chatID, session, text)
+	r.execClaudeQueued(ctx, chatID, session, text)
+}
+
+func (r *Router) execClaudeQueued(ctx context.Context, chatID string, session *Session, prompt string) {
+	if r.queue != nil {
+		pending := r.queue.PendingCount(chatID)
+		if pending > 0 {
+			r.sender.SendText(ctx, chatID, fmt.Sprintf("Queued (position %d)...", pending+1))
+		}
+		done := make(chan struct{})
+		r.queue.Enqueue(chatID, func() {
+			defer close(done)
+			r.execClaude(ctx, chatID, session, prompt)
+		})
+		<-done
+	} else {
+		r.execClaude(ctx, chatID, session, prompt)
+	}
 }
 
 func (r *Router) execClaude(ctx context.Context, chatID string, session *Session, prompt string) {
