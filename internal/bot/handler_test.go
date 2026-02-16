@@ -1,123 +1,135 @@
 package bot
 
 import (
-    "context"
-    "encoding/json"
-    "testing"
+	"context"
+	"encoding/json"
+	"testing"
 
-    larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
-type fakeSender struct {
-    called bool
-    chatID string
-    text   string
+type fakeRouter struct {
+	called bool
+	chatID string
+	userID string
+	text   string
 }
 
-func (f *fakeSender) SendText(_ context.Context, chatID, text string) error {
+func (f *fakeRouter) Route(_ context.Context, chatID, userID, text string) {
 	f.called = true
 	f.chatID = chatID
+	f.userID = userID
 	f.text = text
-	return nil
 }
 
-func (f *fakeSender) SendTextChunked(_ context.Context, chatID, text string) error {
-	f.called = true
-	f.chatID = chatID
-	f.text = text
-	return nil
+func makeEvent(senderType, senderID, chatID, chatType, msgType, content string, mentions []map[string]interface{}) []byte {
+	evt := map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{"event_type": "im.message.receive_v1"},
+		"event": map[string]interface{}{
+			"sender": map[string]interface{}{
+				"sender_type": senderType,
+				"sender_id": map[string]interface{}{
+					"open_id": senderID,
+				},
+			},
+			"message": map[string]interface{}{
+				"chat_id":      chatID,
+				"chat_type":    chatType,
+				"message_type": msgType,
+				"content":      content,
+				"mentions":     mentions,
+			},
+		},
+	}
+	data, _ := json.Marshal(evt)
+	return data
 }
 
-func TestHandleMessage_TextEcho(t *testing.T) {
-    raw := []byte(`{
-        "schema":"2.0",
-        "header":{"event_type":"im.message.receive_v1"},
-        "event":{
-            "sender":{"sender_type":"user"},
-            "message":{
-                "chat_id":"oc_test_chat",
-                "message_type":"text",
-                "content":"{\"text\":\"hello\"}"
-            }
-        }
-    }`)
+func TestHandleMessage_TextToRouter(t *testing.T) {
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "text", `{"text":"hello"}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
 
-    var evt larkim.P2MessageReceiveV1
-    if err := json.Unmarshal(raw, &evt); err != nil {
-        t.Fatalf("unmarshal event: %v", err)
-    }
+	router := &fakeRouter{}
+	h := NewHandler(router, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
 
-    sender := &fakeSender{}
-    h := NewHandler(sender, true)
-
-    if err := h.HandleMessage(context.Background(), &evt); err != nil {
-        t.Fatalf("HandleMessage error: %v", err)
-    }
-
-    if !sender.called {
-        t.Fatalf("expected sender to be called")
-    }
-    if sender.chatID != "oc_test_chat" || sender.text != "hello" {
-        t.Fatalf("unexpected send args: %q %q", sender.chatID, sender.text)
-    }
-}
-
-func TestHandleMessage_IgnoresNonText(t *testing.T) {
-    raw := []byte(`{
-        "schema":"2.0",
-        "header":{"event_type":"im.message.receive_v1"},
-        "event":{
-            "sender":{"sender_type":"user"},
-            "message":{
-                "chat_id":"oc_test_chat",
-                "message_type":"file",
-                "content":"{\"file_key\":\"file_x\"}"
-            }
-        }
-    }`)
-
-    var evt larkim.P2MessageReceiveV1
-    if err := json.Unmarshal(raw, &evt); err != nil {
-        t.Fatalf("unmarshal event: %v", err)
-    }
-
-    sender := &fakeSender{}
-    h := NewHandler(sender, true)
-
-    if err := h.HandleMessage(context.Background(), &evt); err != nil {
-        t.Fatalf("HandleMessage error: %v", err)
-    }
-    if sender.called {
-        t.Fatalf("expected sender not called")
-    }
+	if !router.called {
+		t.Fatalf("expected router to be called")
+	}
+	if router.chatID != "oc_chat" {
+		t.Fatalf("chatID mismatch: %q", router.chatID)
+	}
+	if router.userID != "user1" {
+		t.Fatalf("userID mismatch: %q", router.userID)
+	}
+	if router.text != "hello" {
+		t.Fatalf("text mismatch: %q", router.text)
+	}
 }
 
 func TestHandleMessage_IgnoresBotSender(t *testing.T) {
-    raw := []byte(`{
-        "schema":"2.0",
-        "header":{"event_type":"im.message.receive_v1"},
-        "event":{
-            "sender":{"sender_type":"app"},
-            "message":{
-                "chat_id":"oc_test_chat",
-                "message_type":"text",
-                "content":"{\"text\":\"hello\"}"
-            }
-        }
-    }`)
+	raw := makeEvent("app", "bot", "oc_chat", "p2p", "text", `{"text":"hello"}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
 
-    var evt larkim.P2MessageReceiveV1
-    if err := json.Unmarshal(raw, &evt); err != nil {
-        t.Fatalf("unmarshal event: %v", err)
-    }
+	router := &fakeRouter{}
+	h := NewHandler(router, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
 
-    sender := &fakeSender{}
-    h := NewHandler(sender, true)
+	if router.called {
+		t.Fatalf("expected router not called for bot sender")
+	}
+}
 
-    if err := h.HandleMessage(context.Background(), &evt); err != nil {
-        t.Fatalf("HandleMessage error: %v", err)
-    }
-    if sender.called {
-        t.Fatalf("expected sender not called")
-    }
+func TestHandleMessage_GroupChatRequiresMention(t *testing.T) {
+	raw := makeEvent("user", "user1", "oc_chat", "group", "text", `{"text":"hello"}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called without @mention in group")
+	}
+}
+
+func TestHandleMessage_GroupChatWithMention(t *testing.T) {
+	mentions := []map[string]interface{}{
+		{
+			"id":  map[string]interface{}{"open_id": "bot_id"},
+			"key": "@_user_bot",
+		},
+	}
+	raw := makeEvent("user", "user1", "oc_chat", "group", "text", `{"text":"@_user_bot hello"}`, mentions)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router called with @mention in group")
+	}
+	if router.text != "hello" {
+		t.Fatalf("expected cleaned text 'hello', got %q", router.text)
+	}
+}
+
+func TestHandleMessage_IgnoresNonText(t *testing.T) {
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "image", `{"image_key":"img_xxx"}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, true, "bot_id")
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for non-text message")
+	}
 }
