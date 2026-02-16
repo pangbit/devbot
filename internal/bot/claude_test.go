@@ -72,3 +72,57 @@ func TestClaudeExecModelGetSet(t *testing.T) {
 		t.Fatalf("expected opus, got %q", exec.Model())
 	}
 }
+
+func TestClaudeExecCountAndDuration(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho ok\n"), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+
+	// Before any execution
+	if exec.ExecCount() != 0 {
+		t.Fatalf("expected 0 exec count, got %d", exec.ExecCount())
+	}
+	if exec.LastExecDuration() != 0 {
+		t.Fatalf("expected 0 duration, got %v", exec.LastExecDuration())
+	}
+
+	// After first execution
+	_, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	if exec.ExecCount() != 1 {
+		t.Fatalf("expected 1 exec count, got %d", exec.ExecCount())
+	}
+	if exec.LastExecDuration() <= 0 {
+		t.Fatalf("expected positive duration, got %v", exec.LastExecDuration())
+	}
+
+	// After second execution
+	_, err = exec.Exec(context.Background(), "test2", dir, "", "safe", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	if exec.ExecCount() != 2 {
+		t.Fatalf("expected 2 exec count, got %d", exec.ExecCount())
+	}
+}
+
+func TestClaudeExecCountIncrementsOnError(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, _ = exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+
+	// Count should still increment even on error
+	if exec.ExecCount() != 1 {
+		t.Fatalf("expected 1 exec count after error, got %d", exec.ExecCount())
+	}
+	if exec.LastExecDuration() <= 0 {
+		t.Fatalf("expected positive duration after error, got %v", exec.LastExecDuration())
+	}
+}

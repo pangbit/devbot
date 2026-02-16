@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +17,10 @@ type Router struct {
 	allowedUsers map[string]bool
 	startTime    time.Time
 	queue        *MessageQueue
+	docSyncer    DocPusher
 }
 
-func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUsers map[string]bool, workRoot string) *Router {
+func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUsers map[string]bool, workRoot string, docSyncer DocPusher) *Router {
 	if store.WorkRoot() == "" {
 		store.SetWorkRoot(workRoot)
 	}
@@ -28,11 +30,18 @@ func NewRouter(executor *ClaudeExecutor, store *Store, sender Sender, allowedUse
 		sender:       sender,
 		allowedUsers: allowedUsers,
 		startTime:    time.Now(),
+		docSyncer:    docSyncer,
 	}
 }
 
 func (r *Router) SetQueue(q *MessageQueue) {
 	r.queue = q
+}
+
+func (r *Router) save() {
+	if err := r.store.Save(); err != nil {
+		log.Printf("router: failed to save state: %v", err)
+	}
 }
 
 func (r *Router) Route(ctx context.Context, chatID, userID, text string) {
@@ -166,7 +175,7 @@ System:
 
 Docs:
   /doc push <path>  -- Push Markdown to Feishu doc
-  /doc pull         -- Pull shared doc to project
+  /doc pull <path>  -- Pull shared doc to project
   /doc bind <path>  -- Bind file to Feishu doc
   /doc unbind <path>-- Unbind
   /doc list         -- List bindings
@@ -188,18 +197,35 @@ func (r *Router) cmdStatus(ctx context.Context, chatID string) {
 		mode = "safe"
 	}
 
+	var queuePending int
+	if r.queue != nil {
+		queuePending = r.queue.PendingCount(chatID)
+	}
+
+	lastExec := r.executor.LastExecDuration().Truncate(time.Millisecond)
+	lastExecStr := "-"
+	if r.executor.ExecCount() > 0 {
+		lastExecStr = lastExec.String()
+	}
+
 	status := fmt.Sprintf(`Status:
   WorkDir:  %s
   Session:  %s
   Model:    %s
   Mode:     %s
   Running:  %v
-  uptime:   %s`,
+  Execs:    %d
+  LastExec: %s
+  Queued:   %d
+  Uptime:   %s`,
 		session.WorkDir,
 		session.ClaudeSessionID,
 		session.Model,
 		mode,
 		r.executor.IsRunning(),
+		r.executor.ExecCount(),
+		lastExecStr,
+		queuePending,
 		uptime,
 	)
 	r.sender.SendText(ctx, chatID, status)
@@ -240,7 +266,7 @@ func (r *Router) cmdRoot(ctx context.Context, chatID, args string) {
 		return
 	}
 	r.store.SetWorkRoot(args)
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "Root set to: "+args)
 }
 
@@ -271,7 +297,7 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		return
 	}
 	session.WorkDir = target
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "Changed to: "+target)
 }
 
@@ -282,7 +308,7 @@ func (r *Router) cmdNewSession(ctx context.Context, chatID string) {
 	}
 	session.ClaudeSessionID = ""
 	session.LastOutput = ""
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "New session started.")
 }
 
@@ -313,7 +339,7 @@ func (r *Router) cmdSwitch(ctx context.Context, chatID, args string) {
 	}
 	session.ClaudeSessionID = args
 	session.LastOutput = ""
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "Switched to session: "+args)
 }
 
@@ -332,21 +358,21 @@ func (r *Router) cmdModel(ctx context.Context, chatID, args string) {
 	}
 	session := r.getSession(chatID)
 	session.Model = args
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "Model set to: "+args)
 }
 
 func (r *Router) cmdYolo(ctx context.Context, chatID string) {
 	session := r.getSession(chatID)
 	session.PermissionMode = "yolo"
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "YOLO mode enabled. Claude will execute without restrictions.")
 }
 
 func (r *Router) cmdSafe(ctx context.Context, chatID string) {
 	session := r.getSession(chatID)
 	session.PermissionMode = "safe"
-	r.store.Save()
+	r.save()
 	r.sender.SendText(ctx, chatID, "Safe mode restored.")
 }
 
@@ -416,10 +442,7 @@ func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 
 func findFile(workDir, query string) string {
 	if filepath.IsAbs(query) {
-		if _, err := os.Stat(query); err == nil {
-			return query
-		}
-		return ""
+		return "" // Don't allow absolute paths
 	}
 	exact := filepath.Join(workDir, query)
 	if _, err := os.Stat(exact); err == nil {
@@ -441,7 +464,226 @@ func findFile(workDir, query string) string {
 }
 
 func (r *Router) cmdDoc(ctx context.Context, chatID, args string) {
-	r.sender.SendText(ctx, chatID, "Doc command not yet implemented.")
+	parts := strings.SplitN(args, " ", 2)
+	sub := ""
+	subArgs := ""
+	if len(parts) > 0 {
+		sub = strings.ToLower(parts[0])
+	}
+	if len(parts) > 1 {
+		subArgs = strings.TrimSpace(parts[1])
+	}
+
+	switch sub {
+	case "push":
+		r.cmdDocPush(ctx, chatID, subArgs)
+	case "pull":
+		r.cmdDocPull(ctx, chatID, subArgs)
+	case "bind":
+		r.cmdDocBind(ctx, chatID, subArgs)
+	case "unbind":
+		r.cmdDocUnbind(ctx, chatID, subArgs)
+	case "list":
+		r.cmdDocList(ctx, chatID)
+	case "":
+		r.sender.SendText(ctx, chatID, "Usage: /doc push|pull|bind|unbind|list")
+	default:
+		r.sender.SendText(ctx, chatID, "Unknown doc subcommand. Usage: /doc push|pull|bind|unbind|list")
+	}
+}
+
+func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
+	if r.docSyncer == nil {
+		r.sender.SendText(ctx, chatID, "Doc sync not configured.")
+		return
+	}
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "Usage: /doc push <path>")
+		return
+	}
+
+	session := r.getSession(chatID)
+	filePath := args
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(session.WorkDir, filePath)
+	}
+	filePath = filepath.Clean(filePath)
+
+	root := r.store.WorkRoot()
+	if !strings.HasPrefix(filePath, root) {
+		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		return
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("File not found: %s", args))
+		return
+	}
+
+	title := filepath.Base(filePath)
+	content := string(data)
+
+	docID, docURL, err := r.docSyncer.CreateAndPushDoc(ctx, title, content)
+	if err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error pushing doc: %v", err))
+		return
+	}
+
+	r.store.SetDocBinding(filePath, docID)
+	r.save()
+
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Pushed to Feishu doc.\nID: %s\nURL: %s", docID, docURL))
+}
+
+func (r *Router) cmdDocPull(ctx context.Context, chatID, args string) {
+	if r.docSyncer == nil {
+		r.sender.SendText(ctx, chatID, "Doc sync not configured.")
+		return
+	}
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "Usage: /doc pull <path>")
+		return
+	}
+
+	session := r.getSession(chatID)
+	filePath := args
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(session.WorkDir, filePath)
+	}
+	filePath = filepath.Clean(filePath)
+
+	root := r.store.WorkRoot()
+	if !strings.HasPrefix(filePath, root) {
+		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		return
+	}
+
+	bindings := r.store.DocBindings()
+	docID, ok := bindings[filePath]
+	if !ok {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("No binding found for %s. Use /doc bind first.", args))
+		return
+	}
+
+	content, err := r.docSyncer.PullDocContent(ctx, docID)
+	if err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error pulling doc: %v", err))
+		return
+	}
+
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error writing file: %v", err))
+		return
+	}
+
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Pulled doc %s to %s", docID, args))
+}
+
+func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) {
+	parts := strings.SplitN(args, " ", 2)
+	if len(parts) < 2 {
+		r.sender.SendText(ctx, chatID, "Usage: /doc bind <path> <docURL or docID>")
+		return
+	}
+
+	session := r.getSession(chatID)
+	filePath := parts[0]
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(session.WorkDir, filePath)
+	}
+	filePath = filepath.Clean(filePath)
+
+	root := r.store.WorkRoot()
+	if !strings.HasPrefix(filePath, root) {
+		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		return
+	}
+
+	docID := ParseDocID(parts[1])
+	r.store.SetDocBinding(filePath, docID)
+	r.save()
+
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Bound %s -> %s", parts[0], docID))
+}
+
+func (r *Router) cmdDocUnbind(ctx context.Context, chatID, args string) {
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "Usage: /doc unbind <path>")
+		return
+	}
+
+	session := r.getSession(chatID)
+	filePath := args
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(session.WorkDir, filePath)
+	}
+	filePath = filepath.Clean(filePath)
+
+	root := r.store.WorkRoot()
+	if !strings.HasPrefix(filePath, root) {
+		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		return
+	}
+
+	r.store.RemoveDocBinding(filePath)
+	r.save()
+
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Unbound %s", args))
+}
+
+func (r *Router) cmdDocList(ctx context.Context, chatID string) {
+	bindings := r.store.DocBindings()
+	if len(bindings) == 0 {
+		r.sender.SendText(ctx, chatID, "No bindings.")
+		return
+	}
+
+	var lines []string
+	for path, docID := range bindings {
+		lines = append(lines, fmt.Sprintf("  %s -> %s", path, docID))
+	}
+	r.sender.SendText(ctx, chatID, "Doc bindings:\n"+strings.Join(lines, "\n"))
+}
+
+func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string) {
+	if !r.allowedUsers[userID] {
+		return
+	}
+
+	session := r.getSession(chatID)
+
+	// Save image to work directory
+	imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+	os.MkdirAll(imgDir, 0755)
+	imgPath := filepath.Join(imgDir, filepath.Base(fileName))
+	if err := os.WriteFile(imgPath, imageData, 0644); err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to save image: %v", err))
+		return
+	}
+
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Image saved to: %s", imgPath))
+	prompt := fmt.Sprintf("User sent an image, saved to: %s. Describe or process this image as needed.", imgPath)
+	r.execClaudeQueued(ctx, chatID, session, prompt)
+}
+
+func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte) {
+	if !r.allowedUsers[userID] {
+		return
+	}
+
+	session := r.getSession(chatID)
+
+	// Save file to work directory (use Base to prevent path traversal)
+	filePath := filepath.Join(session.WorkDir, filepath.Base(fileName))
+	if err := os.WriteFile(filePath, fileData, 0644); err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to save file: %v", err))
+		return
+	}
+
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("File saved to: %s", filePath))
+	prompt := fmt.Sprintf("User sent a file '%s', saved to: %s. Examine or process this file as needed.", fileName, filePath)
+	r.execClaudeQueued(ctx, chatID, session, prompt)
 }
 
 func (r *Router) handlePrompt(ctx context.Context, chatID, text string) {
@@ -456,7 +698,7 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, session *S
 			r.sender.SendText(ctx, chatID, fmt.Sprintf("Queued (position %d)...", pending+1))
 		}
 		r.queue.Enqueue(chatID, func() {
-			r.execClaude(ctx, chatID, session, prompt)
+			r.execClaude(context.Background(), chatID, session, prompt)
 		})
 	} else {
 		r.execClaude(ctx, chatID, session, prompt)
@@ -477,7 +719,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, session *Session
 	}
 
 	session.LastOutput = output
-	r.store.Save()
+	r.save()
 
 	r.sender.SendTextChunked(ctx, chatID, output)
 }

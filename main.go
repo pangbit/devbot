@@ -33,10 +33,12 @@ func main() {
         time.Duration(cfg.ClaudeTimeout)*time.Second,
     )
 
-    router := bot.NewRouter(executor, store, sender, cfg.AllowedUserIDs, cfg.WorkRoot)
+    docSyncer := bot.NewDocSyncer(client)
+    router := bot.NewRouter(executor, store, sender, cfg.AllowedUserIDs, cfg.WorkRoot, docSyncer)
     queue := bot.NewMessageQueue()
     router.SetQueue(queue)
-    handler := bot.NewHandler(router, cfg.SkipBotSelf, cfg.BotOpenID)
+    downloader := bot.NewLarkDownloader(client)
+    handler := bot.NewHandler(router, downloader, sender, cfg.SkipBotSelf, cfg.BotOpenID)
 
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()

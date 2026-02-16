@@ -17,7 +17,7 @@ func (f *fakeWS) Start(_ context.Context) error {
 func TestRunStartsWS(t *testing.T) {
 	cfg := Config{AppID: "app", AppSecret: "secret", AllowedUserIDs: map[string]bool{}, SkipBotSelf: true}
 	router := &fakeRouter{}
-	h := NewHandler(router, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id")
 
 	var gotAppID, gotSecret string
 	var gotHandler *dispatcher.EventDispatcher

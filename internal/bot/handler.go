@@ -3,6 +3,9 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"strings"
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -15,10 +18,27 @@ type Sender interface {
 
 type MessageRouter interface {
 	Route(ctx context.Context, chatID, userID, text string)
+	RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string)
+	RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte)
 }
+
+// Downloader downloads images and files from Feishu.
+type Downloader interface {
+	// DownloadImage downloads an image resource from a message.
+	// Uses the MessageResource API since Image.Get only works for bot-uploaded images.
+	DownloadImage(ctx context.Context, messageID, imageKey string) (io.ReadCloser, error)
+	// DownloadFile downloads a file resource from a message.
+	// Returns a reader and the server-provided filename.
+	DownloadFile(ctx context.Context, messageID, fileKey string) (io.ReadCloser, string, error)
+}
+
+const maxImageSize = 10 << 20 // 10 MB
+const maxFileSize = 50 << 20  // 50 MB
 
 type Handler struct {
 	router      MessageRouter
+	downloader  Downloader
+	sender      Sender
 	skipBotSelf bool
 	botID       string
 }
@@ -32,6 +52,7 @@ type eventEnvelope struct {
 			} `json:"sender_id"`
 		} `json:"sender"`
 		Message struct {
+			MessageID   string `json:"message_id"`
 			ChatID      string `json:"chat_id"`
 			ChatType    string `json:"chat_type"`
 			MessageType string `json:"message_type"`
@@ -50,8 +71,23 @@ type textContent struct {
 	Text string `json:"text"`
 }
 
-func NewHandler(router MessageRouter, skipBotSelf bool, botID string) *Handler {
-	return &Handler{router: router, skipBotSelf: skipBotSelf, botID: botID}
+type imageContent struct {
+	ImageKey string `json:"image_key"`
+}
+
+type fileContent struct {
+	FileKey  string `json:"file_key"`
+	FileName string `json:"file_name"`
+}
+
+func NewHandler(router MessageRouter, downloader Downloader, sender Sender, skipBotSelf bool, botID string) *Handler {
+	return &Handler{
+		router:      router,
+		downloader:  downloader,
+		sender:      sender,
+		skipBotSelf: skipBotSelf,
+		botID:       botID,
+	}
 }
 
 func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiveV1) error {
@@ -75,7 +111,12 @@ func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiv
 		}
 	}
 
-	if env.Event.Message.MessageType == "text" {
+	chatID := env.Event.Message.ChatID
+	userID := env.Event.Sender.SenderID.OpenID
+	messageID := env.Event.Message.MessageID
+
+	switch env.Event.Message.MessageType {
+	case "text":
 		var content textContent
 		if err := json.Unmarshal([]byte(env.Event.Message.Content), &content); err != nil {
 			return nil
@@ -84,12 +125,105 @@ func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiv
 		if text == "" {
 			return nil
 		}
-		h.router.Route(ctx, env.Event.Message.ChatID, env.Event.Sender.SenderID.OpenID, text)
-		return nil
+		h.router.Route(ctx, chatID, userID, text)
+
+	case "image":
+		h.handleImage(ctx, chatID, userID, messageID, env.Event.Message.Content)
+
+	case "file":
+		h.handleFile(ctx, chatID, userID, messageID, env.Event.Message.Content)
 	}
 
-	// TODO: handle image and file messages
 	return nil
+}
+
+func (h *Handler) handleImage(ctx context.Context, chatID, userID, messageID, rawContent string) {
+	var content imageContent
+	if err := json.Unmarshal([]byte(rawContent), &content); err != nil {
+		log.Printf("handler: failed to parse image content: %v", err)
+		return
+	}
+	if content.ImageKey == "" {
+		return
+	}
+	if h.downloader == nil {
+		log.Println("handler: downloader not configured, cannot download image")
+		return
+	}
+
+	reader, err := h.downloader.DownloadImage(ctx, messageID, content.ImageKey)
+	if err != nil {
+		log.Printf("handler: failed to download image %s: %v", content.ImageKey, err)
+		if h.sender != nil {
+			h.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to download image: %v", err))
+		}
+		return
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(io.LimitReader(reader, maxImageSize+1))
+	if err != nil {
+		log.Printf("handler: failed to read image data: %v", err)
+		return
+	}
+	if len(data) > maxImageSize {
+		log.Printf("handler: image %s exceeds max size (%d bytes)", content.ImageKey, maxImageSize)
+		if h.sender != nil {
+			h.sender.SendText(ctx, chatID, fmt.Sprintf("Image too large (max %d MB)", maxImageSize>>20))
+		}
+		return
+	}
+
+	h.router.RouteImage(ctx, chatID, userID, data, content.ImageKey+".png")
+}
+
+func (h *Handler) handleFile(ctx context.Context, chatID, userID, messageID, rawContent string) {
+	var content fileContent
+	if err := json.Unmarshal([]byte(rawContent), &content); err != nil {
+		log.Printf("handler: failed to parse file content: %v", err)
+		return
+	}
+	if content.FileKey == "" {
+		return
+	}
+	if h.downloader == nil {
+		log.Println("handler: downloader not configured, cannot download file")
+		return
+	}
+
+	reader, serverName, err := h.downloader.DownloadFile(ctx, messageID, content.FileKey)
+	if err != nil {
+		log.Printf("handler: failed to download file %s: %v", content.FileKey, err)
+		if h.sender != nil {
+			h.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to download file: %v", err))
+		}
+		return
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(io.LimitReader(reader, maxFileSize+1))
+	if err != nil {
+		log.Printf("handler: failed to read file data: %v", err)
+		return
+	}
+	if len(data) > maxFileSize {
+		log.Printf("handler: file %s exceeds max size (%d bytes)", content.FileKey, maxFileSize)
+		if h.sender != nil {
+			h.sender.SendText(ctx, chatID, fmt.Sprintf("File too large (max %d MB)", maxFileSize>>20))
+		}
+		return
+	}
+
+	// Prefer the filename from the message content, fallback to server-provided name
+	fileName := content.FileName
+	if fileName == "" {
+		fileName = serverName
+	}
+	if fileName == "" {
+		fileName = content.FileKey
+	}
+
+	h.router.RouteFile(ctx, chatID, userID, fileName, data)
 }
 
 func (h *Handler) isMentioned(env eventEnvelope) bool {

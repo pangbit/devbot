@@ -46,7 +46,7 @@ func newTestRouter(t *testing.T) (*Router, *spySender) {
 	}
 	sender := &spySender{}
 	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
-	r := NewRouter(exec, store, sender, map[string]bool{"user1": true}, dir)
+	r := NewRouter(exec, store, sender, map[string]bool{"user1": true}, dir, nil)
 	return r, sender
 }
 
@@ -83,8 +83,25 @@ func TestRouterStatus(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/status")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "uptime") || !strings.Contains(msg, "sonnet") {
-		t.Fatalf("status should show uptime and model, got: %q", msg)
+	if !strings.Contains(msg, "Uptime") || !strings.Contains(msg, "sonnet") {
+		t.Fatalf("status should show Uptime and model, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Execs:") {
+		t.Fatalf("status should show Execs, got: %q", msg)
+	}
+	if !strings.Contains(msg, "LastExec:") {
+		t.Fatalf("status should show LastExec, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Queued:") {
+		t.Fatalf("status should show Queued, got: %q", msg)
+	}
+	// With no executions, LastExec should be "-"
+	if !strings.Contains(msg, "LastExec: -") {
+		t.Fatalf("status should show LastExec: - when no execs, got: %q", msg)
+	}
+	// Execs should be 0
+	if !strings.Contains(msg, "Execs:    0") {
+		t.Fatalf("status should show Execs: 0, got: %q", msg)
 	}
 }
 
@@ -213,6 +230,74 @@ func TestRouterCdPathTraversal(t *testing.T) {
 	}
 }
 
+func TestRouterRouteImageSavesAndSendsPrompt(t *testing.T) {
+	r, sender := newTestRouter(t)
+	imgData := []byte("fake-image-data")
+	r.RouteImage(context.Background(), "chat1", "user1", imgData, "test_image.png")
+
+	if len(sender.messages) == 0 {
+		t.Fatalf("expected at least one message")
+	}
+	// First message should confirm the image was saved
+	if !strings.Contains(sender.messages[0], "Image saved to:") {
+		t.Fatalf("expected 'Image saved to:' message, got: %q", sender.messages[0])
+	}
+	if !strings.Contains(sender.messages[0], ".devbot-images") {
+		t.Fatalf("expected .devbot-images in path, got: %q", sender.messages[0])
+	}
+
+	// Verify the image file was actually written
+	session := r.getSession("chat1")
+	imgPath := filepath.Join(session.WorkDir, ".devbot-images", "test_image.png")
+	data, err := os.ReadFile(imgPath)
+	if err != nil {
+		t.Fatalf("expected image file to exist at %s: %v", imgPath, err)
+	}
+	if string(data) != "fake-image-data" {
+		t.Fatalf("image data mismatch: got %q", string(data))
+	}
+}
+
+func TestRouterRouteImageUnauthorized(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.RouteImage(context.Background(), "chat1", "hacker", []byte("data"), "test.png")
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no response for unauthorized user")
+	}
+}
+
+func TestRouterRouteFileSavesAndSendsPrompt(t *testing.T) {
+	r, sender := newTestRouter(t)
+	fileData := []byte("file-content-here")
+	r.RouteFile(context.Background(), "chat1", "user1", "report.pdf", fileData)
+
+	if len(sender.messages) == 0 {
+		t.Fatalf("expected at least one message")
+	}
+	if !strings.Contains(sender.messages[0], "File saved to:") {
+		t.Fatalf("expected 'File saved to:' message, got: %q", sender.messages[0])
+	}
+
+	// Verify the file was actually written
+	session := r.getSession("chat1")
+	filePath := filepath.Join(session.WorkDir, "report.pdf")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("expected file to exist at %s: %v", filePath, err)
+	}
+	if string(data) != "file-content-here" {
+		t.Fatalf("file data mismatch: got %q", string(data))
+	}
+}
+
+func TestRouterRouteFileUnauthorized(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.RouteFile(context.Background(), "chat1", "hacker", "test.txt", []byte("data"))
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no response for unauthorized user")
+	}
+}
+
 func TestRouterWorkRootNotOverwritten(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(filepath.Join(dir, "state.json"))
@@ -222,7 +307,7 @@ func TestRouterWorkRootNotOverwritten(t *testing.T) {
 	store.SetWorkRoot("/existing/root")
 	sender := &spySender{}
 	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
-	NewRouter(exec, store, sender, map[string]bool{"user1": true}, "/new/root")
+	NewRouter(exec, store, sender, map[string]bool{"user1": true}, "/new/root", nil)
 	if store.WorkRoot() != "/existing/root" {
 		t.Fatalf("expected WorkRoot to remain /existing/root, got %q", store.WorkRoot())
 	}

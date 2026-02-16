@@ -10,11 +10,13 @@ import (
 )
 
 type ClaudeExecutor struct {
-	claudePath string
-	model      string
-	timeout    time.Duration
-	mu         sync.Mutex
-	running    *exec.Cmd
+	claudePath       string
+	model            string
+	timeout          time.Duration
+	mu               sync.Mutex
+	running          *exec.Cmd
+	lastExecDuration time.Duration
+	execCount        int
 }
 
 func NewClaudeExecutor(claudePath, model string, timeout time.Duration) *ClaudeExecutor {
@@ -51,10 +53,14 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 	c.running = cmd
 	c.mu.Unlock()
 
+	start := time.Now()
 	err := cmd.Run()
+	duration := time.Since(start)
 
 	c.mu.Lock()
 	c.running = nil
+	c.execCount++
+	c.lastExecDuration = duration
 	c.mu.Unlock()
 
 	if err != nil {
@@ -94,4 +100,16 @@ func (c *ClaudeExecutor) Model() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.model
+}
+
+func (c *ClaudeExecutor) ExecCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.execCount
+}
+
+func (c *ClaudeExecutor) LastExecDuration() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastExecDuration
 }
