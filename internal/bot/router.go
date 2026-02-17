@@ -801,5 +801,9 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	})
 	r.save()
 
-	r.sender.SendTextChunked(ctx, chatID, result.Output)
+	output := result.Output
+	if output == "" {
+		output = "(empty response)"
+	}
+	r.sender.SendTextChunked(ctx, chatID, output)
 }

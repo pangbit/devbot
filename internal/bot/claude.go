@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"sync"
 	"time"
@@ -80,12 +81,22 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 		return ExecResult{}, fmt.Errorf("claude error: %w\nstderr: %s", err, stderr.String())
 	}
 
+	log.Printf("claude: raw output len=%d session=%s", stdout.Len(), sessionID)
+
 	var resp struct {
 		Result    string `json:"result"`
 		SessionID string `json:"session_id"`
+		IsError   bool   `json:"is_error"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		return ExecResult{}, fmt.Errorf("failed to parse claude response: %w\nraw: %s", err, stdout.String())
+	}
+	if resp.IsError {
+		errMsg := resp.Result
+		if errMsg == "" {
+			errMsg = "unknown error"
+		}
+		return ExecResult{SessionID: resp.SessionID}, fmt.Errorf("claude error: %s", errMsg)
 	}
 	return ExecResult{Output: resp.Result, SessionID: resp.SessionID}, nil
 }
