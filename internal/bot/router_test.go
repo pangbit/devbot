@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -732,4 +733,70 @@ func TestRouterExecClaudeQueued_ShowsQueuePosition(t *testing.T) {
 	}
 	close(done)
 	q.Shutdown()
+}
+
+func TestRouterSessionContinuity_ResumeUsedOnSecondMessage(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "claude")
+	// Script that records args and returns JSON with session_id
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\necho '{\"type\":\"result\",\"result\":\"ok\",\"session_id\":\"persistent-sess\"}'\n", argsFile)), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// First message — no session ID yet
+	r.Route(context.Background(), "chat1", "user1", "first message")
+	argsData, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(argsData), "--resume") {
+		t.Fatalf("first message should NOT have --resume, got: %q", string(argsData))
+	}
+
+	// Session ID should be saved
+	sess := store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID != "persistent-sess" {
+		t.Fatalf("expected session ID saved, got: %q", sess.ClaudeSessionID)
+	}
+
+	// Second message — should use --resume
+	r.Route(context.Background(), "chat1", "user1", "second message")
+	argsData, _ = os.ReadFile(argsFile)
+	if !strings.Contains(string(argsData), "--resume") || !strings.Contains(string(argsData), "persistent-sess") {
+		t.Fatalf("second message should have --resume persistent-sess, got: %q", string(argsData))
+	}
+}
+
+func TestRouterNewSession_ClearsSessionID(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\necho '{\"type\":\"result\",\"result\":\"ok\",\"session_id\":\"sess-round2\"}'\n", argsFile)), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// First message — establishes session
+	r.Route(context.Background(), "chat1", "user1", "hello")
+	sess := store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID == "" {
+		t.Fatalf("expected session ID after first message")
+	}
+
+	// /new — clears session
+	r.Route(context.Background(), "chat1", "user1", "/new")
+	sess = store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID != "" {
+		t.Fatalf("expected empty session ID after /new, got: %q", sess.ClaudeSessionID)
+	}
+
+	// Next message — should NOT have --resume
+	r.Route(context.Background(), "chat1", "user1", "after new")
+	argsData, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(argsData), "--resume") {
+		t.Fatalf("message after /new should NOT have --resume, got: %q", string(argsData))
+	}
 }
