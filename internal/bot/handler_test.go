@@ -124,7 +124,7 @@ func TestHandleMessage_TextToRouter(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -147,7 +147,7 @@ func TestHandleMessage_IgnoresBotSender(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -161,7 +161,7 @@ func TestHandleMessage_GroupChatRequiresMention(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -181,7 +181,7 @@ func TestHandleMessage_GroupChatWithMention(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -198,7 +198,7 @@ func TestHandleMessage_IgnoresUnsupportedType(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -215,7 +215,7 @@ func TestHandleMessage_ImageDownloadAndRoute(t *testing.T) {
 	imgData := []byte("fake-png-data")
 	dl := &fakeDownloader{imageData: imgData}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, nil, true, "bot_id")
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -244,7 +244,7 @@ func TestHandleMessage_ImageDownloadError(t *testing.T) {
 	dl := &fakeDownloader{imageErr: errors.New("network error")}
 	sender := &fakeSender{}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, sender, true, "bot_id")
+	h := NewHandler(router, dl, sender, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -265,7 +265,7 @@ func TestHandleMessage_ImageNoDownloader(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -282,7 +282,7 @@ func TestHandleMessage_FileDownloadAndRoute(t *testing.T) {
 	fileData := []byte("fake-pdf-data")
 	dl := &fakeDownloader{fileData: fileData, fileName: "server_report.pdf"}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, nil, true, "bot_id")
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -311,7 +311,7 @@ func TestHandleMessage_FileUsesServerName(t *testing.T) {
 
 	dl := &fakeDownloader{fileData: []byte("data"), fileName: "server_name.txt"}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, nil, true, "bot_id")
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -330,7 +330,7 @@ func TestHandleMessage_FileFallsBackToFileKey(t *testing.T) {
 
 	dl := &fakeDownloader{fileData: []byte("data"), fileName: ""}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, nil, true, "bot_id")
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -350,7 +350,7 @@ func TestHandleMessage_FileDownloadError(t *testing.T) {
 	dl := &fakeDownloader{fileErr: errors.New("download failed")}
 	sender := &fakeSender{}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, sender, true, "bot_id")
+	h := NewHandler(router, dl, sender, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -371,7 +371,7 @@ func TestHandleMessage_FileNoDownloader(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -386,7 +386,7 @@ func TestHandleMessage_DocURLInText(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -405,7 +405,7 @@ func TestHandleMessage_DocURLInTextWithCommand(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -426,7 +426,7 @@ func TestHandleMessage_PostWithDocURL(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -444,7 +444,7 @@ func TestHandleMessage_PostWithoutDocURL(t *testing.T) {
 	json.Unmarshal(raw, &evt)
 
 	router := &fakeRouter{}
-	h := NewHandler(router, nil, nil, true, "bot_id")
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if router.called {
@@ -462,7 +462,7 @@ func TestHandleMessage_ImageJPEGExtension(t *testing.T) {
 	jpegData := append([]byte{0xff, 0xd8, 0xff, 0xe0}, make([]byte, 100)...)
 	dl := &fakeDownloader{imageData: jpegData}
 	router := &fakeRouter{}
-	h := NewHandler(router, dl, nil, true, "bot_id")
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
 	if !router.called {
@@ -470,6 +470,81 @@ func TestHandleMessage_ImageJPEGExtension(t *testing.T) {
 	}
 	if router.imageName != "img_jpeg.jpg" {
 		t.Fatalf("expected .jpg extension, got: %q", router.imageName)
+	}
+}
+
+func TestHandleMessage_ResolvesUserIDFormat(t *testing.T) {
+	// Event has both open_id and user_id
+	evt := map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{"event_type": "im.message.receive_v1"},
+		"event": map[string]interface{}{
+			"sender": map[string]interface{}{
+				"sender_type": "user",
+				"sender_id": map[string]interface{}{
+					"open_id": "ou_abc123",
+					"user_id": "testuser1",
+				},
+			},
+			"message": map[string]interface{}{
+				"chat_id":      "oc_chat",
+				"chat_type":    "p2p",
+				"message_type": "text",
+				"content":      `{"text":"hello"}`,
+			},
+		},
+	}
+	data, _ := json.Marshal(evt)
+	var parsed larkim.P2MessageReceiveV1
+	json.Unmarshal(data, &parsed)
+
+	// Allowlist uses user_id format instead of open_id
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", map[string]bool{"testuser1": true})
+	h.HandleMessage(context.Background(), &parsed)
+
+	if !router.called {
+		t.Fatalf("expected router to be called")
+	}
+	if router.userID != "testuser1" {
+		t.Fatalf("expected resolved user_id 'testuser1', got: %q", router.userID)
+	}
+}
+
+func TestHandleMessage_PrefersOpenID(t *testing.T) {
+	evt := map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{"event_type": "im.message.receive_v1"},
+		"event": map[string]interface{}{
+			"sender": map[string]interface{}{
+				"sender_type": "user",
+				"sender_id": map[string]interface{}{
+					"open_id": "ou_abc123",
+					"user_id": "testuser1",
+				},
+			},
+			"message": map[string]interface{}{
+				"chat_id":      "oc_chat",
+				"chat_type":    "p2p",
+				"message_type": "text",
+				"content":      `{"text":"hello"}`,
+			},
+		},
+	}
+	data, _ := json.Marshal(evt)
+	var parsed larkim.P2MessageReceiveV1
+	json.Unmarshal(data, &parsed)
+
+	// Allowlist uses open_id — should prefer it over user_id
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", map[string]bool{"ou_abc123": true})
+	h.HandleMessage(context.Background(), &parsed)
+
+	if !router.called {
+		t.Fatalf("expected router to be called")
+	}
+	if router.userID != "ou_abc123" {
+		t.Fatalf("expected open_id 'ou_abc123', got: %q", router.userID)
 	}
 }
 

@@ -41,7 +41,7 @@ func main() {
     queue := bot.NewMessageQueue()
     router.SetQueue(queue)
     downloader := bot.NewLarkDownloader(client)
-    handler := bot.NewHandler(router, downloader, sender, cfg.SkipBotSelf, cfg.BotOpenID)
+    handler := bot.NewHandler(router, downloader, sender, cfg.SkipBotSelf, cfg.BotOpenID, cfg.AllowedUserIDs)
 
     // Signal handler only cancels the context
     go func() {

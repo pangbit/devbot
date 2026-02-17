@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -331,4 +332,381 @@ func TestRouterWorkRootNotOverwritten(t *testing.T) {
 	if store.WorkRoot() != "/existing/root" {
 		t.Fatalf("expected WorkRoot to remain /existing/root, got %q", store.WorkRoot())
 	}
+}
+
+// --- Thread-safe spy sender for queue-based tests ---
+
+type syncSpySender struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (s *syncSpySender) SendText(_ context.Context, _, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, text)
+	return nil
+}
+
+func (s *syncSpySender) SendTextChunked(_ context.Context, _, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, text)
+	return nil
+}
+
+func (s *syncSpySender) Messages() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]string, len(s.messages))
+	copy(cp, s.messages)
+	return cp
+}
+
+func newTestRouterForExec(t *testing.T) (*Router, *syncSpySender, *MessageQueue) {
+	t.Helper()
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, "project1"), 0755)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644)
+
+	store, err := NewStore(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	sender := &syncSpySender{}
+	exec := NewClaudeExecutor("/nonexistent_binary_for_test", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+	q := NewMessageQueue()
+	r.SetQueue(q)
+	return r, sender, q
+}
+
+// --- /root tests ---
+
+func TestRouterRoot_ShowCurrent(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/root")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Current root:") {
+		t.Fatalf("expected current root, got: %q", msg)
+	}
+}
+
+func TestRouterRoot_SetValid(t *testing.T) {
+	r, sender := newTestRouter(t)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	r.Route(context.Background(), "chat1", "user1", "/root "+dir)
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Root set to:") {
+		t.Fatalf("expected root set confirmation, got: %q", msg)
+	}
+	if r.store.WorkRoot() != dir {
+		t.Fatalf("expected WorkRoot %s, got %s", dir, r.store.WorkRoot())
+	}
+}
+
+func TestRouterRoot_RejectRelative(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/root relative/path")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "absolute path") {
+		t.Fatalf("expected absolute path error, got: %q", msg)
+	}
+}
+
+func TestRouterRoot_RejectSystemDirs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	for _, d := range []string{"/", "/etc", "/var", "/usr", "/sys", "/proc"} {
+		r.Route(context.Background(), "chat1", "user1", "/root "+d)
+		msg := sender.LastMessage()
+		if !strings.Contains(msg, "system directory") {
+			t.Fatalf("expected system dir rejection for %s, got: %q", d, msg)
+		}
+	}
+}
+
+func TestRouterRoot_RejectNonExistent(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/root /nonexistent_path_xyz_abc")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "not found") {
+		t.Fatalf("expected not found, got: %q", msg)
+	}
+}
+
+func TestRouterRoot_RejectFile(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// Resolve symlinks so /var/folders -> /private/var/folders on macOS
+	// avoiding the system directory check for /var
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	f := filepath.Join(dir, "file.txt")
+	os.WriteFile(f, []byte("hi"), 0644)
+	r.Route(context.Background(), "chat1", "user1", "/root "+f)
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Not a directory") {
+		t.Fatalf("expected not a directory, got: %q", msg)
+	}
+}
+
+// --- /sessions tests ---
+
+func TestRouterSessions_Empty(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/sessions")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "No sessions") {
+		t.Fatalf("expected no sessions, got: %q", msg)
+	}
+}
+
+func TestRouterSessions_WithHistory(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.ClaudeSessionID = "current-sess"
+		s.History = []string{"old-sess-1", "old-sess-2"}
+	})
+	r.Route(context.Background(), "chat1", "user1", "/sessions")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "old-sess-1") || !strings.Contains(msg, "old-sess-2") {
+		t.Fatalf("expected history, got: %q", msg)
+	}
+	if !strings.Contains(msg, "current-sess") || !strings.Contains(msg, "(current)") {
+		t.Fatalf("expected current session, got: %q", msg)
+	}
+}
+
+// --- /switch tests ---
+
+func TestRouterSwitch_EmptyArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/switch")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Usage:") {
+		t.Fatalf("expected usage, got: %q", msg)
+	}
+}
+
+func TestRouterSwitch_Valid(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.ClaudeSessionID = "old-sess"
+	})
+	r.Route(context.Background(), "chat1", "user1", "/switch new-sess")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Switched to session: new-sess") {
+		t.Fatalf("expected switch confirmation, got: %q", msg)
+	}
+	sess := r.store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID != "new-sess" {
+		t.Fatalf("expected session new-sess, got: %q", sess.ClaudeSessionID)
+	}
+	found := false
+	for _, h := range sess.History {
+		if h == "old-sess" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected old-sess in history, got: %v", sess.History)
+	}
+}
+
+// --- Usage message tests for commands that require args ---
+
+func TestRouterCommit_EmptyMsg(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/commit")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Usage:") {
+		t.Fatalf("expected usage, got: %q", msg)
+	}
+}
+
+func TestRouterSh_EmptyArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/sh")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Usage:") {
+		t.Fatalf("expected usage, got: %q", msg)
+	}
+}
+
+func TestRouterSummary_NoOutput(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/summary")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "No previous output") {
+		t.Fatalf("expected no output msg, got: %q", msg)
+	}
+}
+
+func TestRouterModelShowCurrent(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/model")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Current model:") {
+		t.Fatalf("expected current model, got: %q", msg)
+	}
+}
+
+func TestRouterLast_WithOutput(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.LastOutput = "Some previous output here"
+	})
+	r.Route(context.Background(), "chat1", "user1", "/last")
+	msg := sender.LastMessage()
+	if msg != "Some previous output here" {
+		t.Fatalf("expected last output, got: %q", msg)
+	}
+}
+
+func TestRouterSetQueue(t *testing.T) {
+	r, _ := newTestRouter(t)
+	if r.queue != nil {
+		t.Fatalf("expected nil queue initially")
+	}
+	q := NewMessageQueue()
+	r.SetQueue(q)
+	if r.queue != q {
+		t.Fatalf("expected queue to be set")
+	}
+}
+
+func TestRouterEmptyText(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "")
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no response for empty text")
+	}
+}
+
+func TestRouterWhitespaceText(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "   ")
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no response for whitespace-only text")
+	}
+}
+
+// --- Exec dispatch tests (commands that call execClaudeQueued) ---
+
+func TestRouterExecCommands(t *testing.T) {
+	commands := []struct {
+		name string
+		cmd  string
+	}{
+		{"commit", "/commit fix bug"},
+		{"git", "/git status"},
+		{"sh", "/sh echo hello"},
+		{"diff", "/diff"},
+		{"push", "/push"},
+		{"undo", "/undo"},
+		{"stash", "/stash"},
+		{"stash_pop", "/stash pop"},
+	}
+	for _, tc := range commands {
+		t.Run(tc.name, func(t *testing.T) {
+			r, sender, q := newTestRouterForExec(t)
+			r.Route(context.Background(), "chat1", "user1", tc.cmd)
+			q.Shutdown()
+			msgs := sender.Messages()
+			hasExecuting := false
+			for _, m := range msgs {
+				if m == "Executing..." {
+					hasExecuting = true
+				}
+			}
+			if !hasExecuting {
+				t.Fatalf("expected 'Executing...' for %s, got: %v", tc.cmd, msgs)
+			}
+		})
+	}
+}
+
+func TestRouterSummary_Dispatches(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.LastOutput = "Some previous output"
+	})
+	r.Route(context.Background(), "chat1", "user1", "/summary")
+	q.Shutdown()
+	msgs := sender.Messages()
+	hasExecuting := false
+	for _, m := range msgs {
+		if m == "Executing..." {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected 'Executing...' message, got: %v", msgs)
+	}
+}
+
+func TestRouterHandlePrompt(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+	r.Route(context.Background(), "chat1", "user1", "hello Claude")
+	q.Shutdown()
+	msgs := sender.Messages()
+	hasExecuting := false
+	for _, m := range msgs {
+		if m == "Executing..." {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected 'Executing...' message, got: %v", msgs)
+	}
+}
+
+func TestRouterExecClaude_NoQueue(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	exec := NewClaudeExecutor("/nonexistent_binary_for_test", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+	// No queue — execClaude called synchronously
+	r.Route(context.Background(), "chat1", "user1", "hello")
+	if len(sender.messages) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d: %v", len(sender.messages), sender.messages)
+	}
+	if sender.messages[0] != "Executing..." {
+		t.Fatalf("expected 'Executing...', got: %q", sender.messages[0])
+	}
+	if !strings.Contains(sender.messages[1], "Error:") {
+		t.Fatalf("expected error message, got: %q", sender.messages[1])
+	}
+}
+
+func TestRouterExecClaudeQueued_ShowsQueuePosition(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+	// Block the worker with a slow task
+	done := make(chan struct{})
+	q.Enqueue("chat1", func() {
+		<-done
+	})
+	// This should be queued behind the blocking task
+	r.Route(context.Background(), "chat1", "user1", "/git log")
+	msgs := sender.Messages()
+	hasQueued := false
+	for _, m := range msgs {
+		if strings.Contains(m, "Queued") {
+			hasQueued = true
+		}
+	}
+	if !hasQueued {
+		t.Fatalf("expected 'Queued' message, got: %v", msgs)
+	}
+	close(done)
+	q.Shutdown()
 }

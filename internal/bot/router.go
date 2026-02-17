@@ -48,6 +48,7 @@ func (r *Router) save() {
 
 func (r *Router) Route(ctx context.Context, chatID, userID, text string) {
 	if !r.allowedUsers[userID] {
+		log.Printf("router: unauthorized user=%s, ignoring", userID)
 		return
 	}
 
@@ -57,6 +58,7 @@ func (r *Router) Route(ctx context.Context, chatID, userID, text string) {
 	}
 
 	if strings.HasPrefix(text, "/") {
+		log.Printf("router: command %s from chat=%s", strings.SplitN(text, " ", 2)[0], chatID)
 		r.handleCommand(ctx, chatID, text)
 		return
 	}

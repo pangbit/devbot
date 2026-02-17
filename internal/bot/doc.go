@@ -10,6 +10,8 @@ import (
 	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 )
 
+const maxBlocksPerRequest = 50 // Feishu API limit for DocumentBlockChildren.Create
+
 // DocPusher is the interface used by the router for document operations.
 // It abstracts away the Lark DocX API so that tests can use a fake implementation.
 type DocPusher interface {
@@ -51,24 +53,33 @@ func (d *DocSyncer) CreateAndPushDoc(ctx context.Context, title, content string)
 	docID := *createResp.Data.Document.DocumentId
 	docURL := fmt.Sprintf("https://feishu.cn/docx/%s", docID)
 
-	// 2. Insert content as paragraph blocks
+	// 2. Insert content as paragraph blocks (max 50 per API call)
 	if content != "" {
 		blocks := buildParagraphBlocks(content)
-		childrenReq := larkdocx.NewCreateDocumentBlockChildrenReqBuilder().
-			DocumentId(docID).
-			BlockId(docID). // The document ID is the page block ID
-			Body(larkdocx.NewCreateDocumentBlockChildrenReqBodyBuilder().
-				Children(blocks).
-				Index(0).
-				Build()).
-			Build()
+		for i := 0; i < len(blocks); i += maxBlocksPerRequest {
+			end := i + maxBlocksPerRequest
+			if end > len(blocks) {
+				end = len(blocks)
+			}
+			batch := blocks[i:end]
 
-		childResp, err := d.client.Docx.DocumentBlockChildren.Create(ctx, childrenReq)
-		if err != nil {
-			return docID, docURL, fmt.Errorf("insert blocks: %w", err)
-		}
-		if !childResp.Success() {
-			return docID, docURL, fmt.Errorf("insert blocks failed: code=%d msg=%s", childResp.Code, childResp.Msg)
+			childrenReq := larkdocx.NewCreateDocumentBlockChildrenReqBuilder().
+				DocumentId(docID).
+				BlockId(docID).
+				DocumentRevisionId(-1).
+				Body(larkdocx.NewCreateDocumentBlockChildrenReqBodyBuilder().
+					Children(batch).
+					Index(-1).
+					Build()).
+				Build()
+
+			childResp, err := d.client.Docx.DocumentBlockChildren.Create(ctx, childrenReq)
+			if err != nil {
+				return docID, docURL, fmt.Errorf("insert blocks (batch %d): %w", i/maxBlocksPerRequest, err)
+			}
+			if !childResp.Success() {
+				return docID, docURL, fmt.Errorf("insert blocks failed (batch %d): code=%d msg=%s", i/maxBlocksPerRequest, childResp.Code, childResp.Msg)
+			}
 		}
 	}
 
@@ -96,10 +107,15 @@ func (d *DocSyncer) PullDocContent(ctx context.Context, docID string) (string, e
 }
 
 // buildParagraphBlocks splits content by newlines and creates a text block for each line.
+// Empty lines are converted to blocks with a single space, since the Feishu API
+// rejects empty TextRun content (error 99992402 "field validation failed").
 func buildParagraphBlocks(content string) []*larkdocx.Block {
 	lines := strings.Split(content, "\n")
 	blocks := make([]*larkdocx.Block, 0, len(lines))
 	for _, line := range lines {
+		if line == "" {
+			line = " "
+		}
 		textElement := larkdocx.NewTextElementBuilder().
 			TextRun(larkdocx.NewTextRunBuilder().Content(line).Build()).
 			Build()

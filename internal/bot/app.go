@@ -32,5 +32,18 @@ func Run(ctx context.Context, cfg Config, h *Handler, factory WSFactory) error {
     }
     handler := buildEventHandler(h)
     client := factory(cfg.AppID, cfg.AppSecret, handler)
-    return client.Start(ctx)
+
+    // The Lark SDK's Start method blocks with select{} and ignores context
+    // cancellation. Run it in a goroutine so we can return when ctx is done.
+    errCh := make(chan error, 1)
+    go func() {
+        errCh <- client.Start(ctx)
+    }()
+
+    select {
+    case err := <-errCh:
+        return err
+    case <-ctx.Done():
+        return ctx.Err()
+    }
 }

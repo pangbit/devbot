@@ -41,11 +41,12 @@ const maxFileSize = 50 << 20  // 50 MB
 var feishuDocURLPattern = regexp.MustCompile(`https?://[a-zA-Z0-9.-]*feishu\.cn/docx/([a-zA-Z0-9]+)`)
 
 type Handler struct {
-	router      MessageRouter
-	downloader  Downloader
-	sender      Sender
-	skipBotSelf bool
-	botID       string
+	router       MessageRouter
+	downloader   Downloader
+	sender       Sender
+	skipBotSelf  bool
+	botID        string
+	allowedUsers map[string]bool
 }
 
 type eventEnvelope struct {
@@ -54,6 +55,7 @@ type eventEnvelope struct {
 			SenderType string `json:"sender_type"`
 			SenderID   struct {
 				OpenID string `json:"open_id"`
+				UserID string `json:"user_id"`
 			} `json:"sender_id"`
 		} `json:"sender"`
 		Message struct {
@@ -85,13 +87,14 @@ type fileContent struct {
 	FileName string `json:"file_name"`
 }
 
-func NewHandler(router MessageRouter, downloader Downloader, sender Sender, skipBotSelf bool, botID string) *Handler {
+func NewHandler(router MessageRouter, downloader Downloader, sender Sender, skipBotSelf bool, botID string, allowedUsers map[string]bool) *Handler {
 	return &Handler{
-		router:      router,
-		downloader:  downloader,
-		sender:      sender,
-		skipBotSelf: skipBotSelf,
-		botID:       botID,
+		router:       router,
+		downloader:   downloader,
+		sender:       sender,
+		skipBotSelf:  skipBotSelf,
+		botID:        botID,
+		allowedUsers: allowedUsers,
 	}
 }
 
@@ -117,8 +120,10 @@ func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiv
 	}
 
 	chatID := env.Event.Message.ChatID
-	userID := env.Event.Sender.SenderID.OpenID
+	userID := h.resolveUserID(env)
 	messageID := env.Event.Message.MessageID
+
+	log.Printf("handler: received %s from user=%s chat=%s", env.Event.Message.MessageType, userID, chatID)
 
 	switch env.Event.Message.MessageType {
 	case "text":
@@ -255,6 +260,19 @@ func (h *Handler) handleFile(ctx context.Context, chatID, userID, messageID, raw
 	}
 
 	h.router.RouteFile(ctx, chatID, userID, fileName, data)
+}
+
+// resolveUserID returns the sender ID that matches the allowedUsers list.
+// Supports both open_id (ou_xxx) and user_id formats in DEVBOT_ALLOWED_USER_IDS.
+func (h *Handler) resolveUserID(env eventEnvelope) string {
+	openID := env.Event.Sender.SenderID.OpenID
+	if h.allowedUsers[openID] {
+		return openID
+	}
+	if uid := env.Event.Sender.SenderID.UserID; uid != "" && h.allowedUsers[uid] {
+		return uid
+	}
+	return openID // fallback to open_id (router will log unauthorized)
 }
 
 func (h *Handler) isMentioned(env eventEnvelope) bool {

@@ -16,7 +16,7 @@ All environment variables use the `DEVBOT_` prefix:
 |----------|----------|-------------|---------|
 | `DEVBOT_APP_ID` | Yes | Feishu App ID | — |
 | `DEVBOT_APP_SECRET` | Yes | Feishu App Secret | — |
-| `DEVBOT_ALLOWED_USER_IDS` | Yes | Comma-separated user IDs | — |
+| `DEVBOT_ALLOWED_USER_IDS` | Yes | Comma-separated user IDs (supports both `open_id` and `user_id` formats) | — |
 | `DEVBOT_WORK_ROOT` | No | Root work directory | `$HOME` |
 | `DEVBOT_CLAUDE_PATH` | No | Claude CLI path | `claude` |
 | `DEVBOT_CLAUDE_MODEL` | No | Default model | `sonnet` |
@@ -95,3 +95,6 @@ Send any text message directly to Claude Code. Use `/` prefix for control comman
 - State persisted to `~/.devbot/state.json`
 - Supports image and file messages (downloaded and saved to work directory)
 - Feishu document share cards are auto-detected for doc binding
+- Graceful shutdown on SIGINT/SIGTERM (context cancellation)
+- Structured logging for message routing, authorization, and API errors
+- User ID resolution supports both `open_id` and `user_id` formats
