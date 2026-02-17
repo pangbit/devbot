@@ -764,8 +764,6 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt str
 }
 
 func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Executing...", Template: "blue"})
-
 	workDir, sessionID, permMode, model := r.store.SessionExecParams(chatID)
 	if permMode == "" {
 		permMode = "safe"
@@ -779,12 +777,11 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		elapsed := now.Sub(startTime)
 		sinceLast := now.Sub(lastSendTime)
 
-		// Don't send progress in first 3 seconds (likely fast)
-		// After that, send every 5 seconds
-		if elapsed < 3*time.Second {
+		// Only send progress after 5 seconds, then every 10 seconds
+		if elapsed < 5*time.Second {
 			return
 		}
-		if sinceLast < 5*time.Second {
+		if sinceLast < 10*time.Second {
 			return
 		}
 

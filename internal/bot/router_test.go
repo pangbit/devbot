@@ -633,14 +633,9 @@ func TestRouterExecCommands(t *testing.T) {
 			r.Route(context.Background(), "chat1", "user1", tc.cmd)
 			q.Shutdown()
 			msgs := sender.Messages()
-			hasExecuting := false
-			for _, m := range msgs {
-				if strings.Contains(m, "Executing...") {
-					hasExecuting = true
-				}
-			}
-			if !hasExecuting {
-				t.Fatalf("expected 'Executing...' for %s, got: %v", tc.cmd, msgs)
+			// Command dispatches execution; expect at least one message (error since binary doesn't exist)
+			if len(msgs) == 0 {
+				t.Fatalf("expected at least one message for %s, got none", tc.cmd)
 			}
 		})
 	}
@@ -655,14 +650,8 @@ func TestRouterSummary_Dispatches(t *testing.T) {
 	r.Route(context.Background(), "chat1", "user1", "/summary")
 	q.Shutdown()
 	msgs := sender.Messages()
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "Executing...") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected 'Executing...' message, got: %v", msgs)
+	if len(msgs) == 0 {
+		t.Fatalf("expected at least one message, got none")
 	}
 }
 
@@ -671,14 +660,8 @@ func TestRouterHandlePrompt(t *testing.T) {
 	r.Route(context.Background(), "chat1", "user1", "hello Claude")
 	q.Shutdown()
 	msgs := sender.Messages()
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "Executing...") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected 'Executing...' message, got: %v", msgs)
+	if len(msgs) == 0 {
+		t.Fatalf("expected at least one message, got none")
 	}
 }
 
@@ -690,14 +673,11 @@ func TestRouterExecClaude_NoQueue(t *testing.T) {
 	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
 	// No queue — execClaude called synchronously
 	r.Route(context.Background(), "chat1", "user1", "hello")
-	if len(sender.messages) < 2 {
-		t.Fatalf("expected at least 2 messages, got %d: %v", len(sender.messages), sender.messages)
+	if len(sender.messages) < 1 {
+		t.Fatalf("expected at least 1 message, got %d: %v", len(sender.messages), sender.messages)
 	}
-	if !strings.Contains(sender.messages[0], "Executing...") {
-		t.Fatalf("expected 'Executing...', got: %q", sender.messages[0])
-	}
-	if !strings.Contains(sender.messages[1], "Error") {
-		t.Fatalf("expected error message, got: %q", sender.messages[1])
+	if !strings.Contains(sender.messages[0], "Error") {
+		t.Fatalf("expected error message, got: %q", sender.messages[0])
 	}
 }
 
@@ -847,14 +827,10 @@ func TestRouterExecClaude_ResponseIsCard(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "hello")
 
-	if len(sender.cards) < 2 {
-		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
+	if len(sender.cards) < 1 {
+		t.Fatalf("expected at least 1 card, got %d: %+v", len(sender.cards), sender.cards)
 	}
-	// First card: Executing...
-	if sender.cards[0].Title != "Executing..." {
-		t.Fatalf("expected Executing... card, got: %q", sender.cards[0].Title)
-	}
-	// Last card: response (no title)
+	// Result card: response (no title)
 	last := sender.cards[len(sender.cards)-1]
 	if last.Title != "" {
 		t.Fatalf("expected no title on response card, got: %q", last.Title)
@@ -927,13 +903,9 @@ echo '{"type":"result","result":"Final answer","session_id":"s1"}'
 
 	r.Route(context.Background(), "chat1", "user1", "hello")
 
-	// Should have: Executing... card, then final result card
-	if len(sender.cards) < 2 {
-		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
-	}
-	// First card: Executing...
-	if sender.cards[0].Title != "Executing..." {
-		t.Fatalf("expected Executing..., got: %q", sender.cards[0].Title)
+	// Fast execution: only the final result card (no Executing... card)
+	if len(sender.cards) < 1 {
+		t.Fatalf("expected at least 1 card, got %d: %+v", len(sender.cards), sender.cards)
 	}
 	// Last card: final result
 	last := sender.cards[len(sender.cards)-1]
