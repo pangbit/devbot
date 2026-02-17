@@ -578,7 +578,7 @@ func TestRouterLast_WithOutput(t *testing.T) {
 	})
 	r.Route(context.Background(), "chat1", "user1", "/last")
 	msg := sender.LastMessage()
-	if msg != "Some previous output here" {
+	if !strings.Contains(msg, "Some previous output here") {
 		t.Fatalf("expected last output, got: %q", msg)
 	}
 }

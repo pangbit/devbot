@@ -396,7 +396,7 @@ func (r *Router) cmdLast(ctx context.Context, chatID string) {
 		r.sender.SendText(ctx, chatID, "No previous output.")
 		return
 	}
-	r.sender.SendTextChunked(ctx, chatID, session.LastOutput)
+	r.sender.SendCard(ctx, chatID, CardMsg{Content: session.LastOutput})
 }
 
 func (r *Router) cmdSummary(ctx context.Context, chatID string) {
@@ -451,7 +451,7 @@ func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error reading file: %v", err))
 		return
 	}
-	r.sender.SendTextChunked(ctx, chatID, fmt.Sprintf("%s:\n\n%s", filepath.Base(target), string(data)))
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: filepath.Base(target), Content: "```\n" + string(data) + "\n```"})
 }
 
 func findFile(workDir, query string) string {
@@ -751,7 +751,7 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt str
 	if r.queue != nil {
 		pending := r.queue.PendingCount(chatID)
 		if pending > 0 {
-			r.sender.SendText(ctx, chatID, fmt.Sprintf("Queued (position %d)...", pending+1))
+			r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Queued (position %d)", pending+1), Template: "blue"})
 		}
 		if err := r.queue.Enqueue(chatID, func() {
 			r.execClaude(r.ctx, chatID, prompt)
