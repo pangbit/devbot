@@ -181,12 +181,12 @@ type permissionDenial struct {
 
 func formatPermissionDenials(denials []permissionDenial) string {
 	var sb strings.Builder
-	sb.WriteString("[Claude wanted to interact but couldn't in non-interactive mode]\n\n")
+	sb.WriteString("Claude 想向你确认：\n\n")
 	for _, d := range denials {
 		if d.ToolName == "AskUserQuestion" {
 			sb.WriteString(formatAskUserQuestion(d.ToolInput))
 		} else {
-			sb.WriteString(fmt.Sprintf("Blocked tool: %s\n", d.ToolName))
+			sb.WriteString(fmt.Sprintf("(blocked: %s)\n", d.ToolName))
 		}
 	}
 	return sb.String()
@@ -208,12 +208,11 @@ func formatAskUserQuestion(input json.RawMessage) string {
 	var sb strings.Builder
 	for _, q := range ask.Questions {
 		sb.WriteString(q.Question)
-		sb.WriteByte('\n')
+		sb.WriteString("\n\n")
 		for i, opt := range q.Options {
-			sb.WriteString(fmt.Sprintf("  %d. %s — %s\n", i+1, opt.Label, opt.Description))
+			sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, opt.Label, opt.Description))
 		}
-		sb.WriteByte('\n')
+		sb.WriteString("\n请回复选项编号继续。")
 	}
-	sb.WriteString("(Reply with your choice to continue)")
 	return sb.String()
 }
