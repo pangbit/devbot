@@ -9,3 +9,6 @@ dist/
 
 # Sensitive config (never commit real config)
 config.yaml
+
+# Internal development plans (not for public)
+docs/plans/
