@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -217,4 +218,144 @@ func formatAskUserQuestion(input json.RawMessage) string {
 		sb.WriteString("\n请回复选项编号继续。")
 	}
 	return sb.String()
+}
+
+type streamEvent struct {
+	Type              string             `json:"type"`
+	Result            string             `json:"result"`
+	SessionID         string             `json:"session_id"`
+	IsError           bool               `json:"is_error"`
+	Subtype           string             `json:"subtype"`
+	PermissionDenials []permissionDenial `json:"permission_denials"`
+	Message           json.RawMessage    `json:"message"`
+}
+
+func extractAssistantText(msg json.RawMessage) string {
+	if msg == nil {
+		return ""
+	}
+	var m struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(msg, &m); err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, c := range m.Content {
+		if c.Type == "text" {
+			sb.WriteString(c.Text)
+		}
+	}
+	return sb.String()
+}
+
+// ExecStream runs Claude CLI with streaming output (stream-json).
+// It calls onProgress with the text from each assistant message during execution.
+// Returns the final ExecResult when done.
+func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessionID, permissionMode, model string, onProgress func(text string)) (ExecResult, error) {
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if permissionMode == "yolo" {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.claudePath, args...)
+	cmd.Dir = workDir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return ExecResult{}, fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	c.mu.Lock()
+	c.running = cmd
+	c.mu.Unlock()
+
+	start := time.Now()
+
+	var result ExecResult
+	var gotResult bool
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var ev streamEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			log.Printf("claude stream: failed to parse line: %v", err)
+			continue
+		}
+
+		switch ev.Type {
+		case "assistant":
+			text := extractAssistantText(ev.Message)
+			if text != "" && onProgress != nil {
+				onProgress(text)
+			}
+		case "result":
+			result.Output = ev.Result
+			result.SessionID = ev.SessionID
+			result.IsPermissionDenial = len(ev.PermissionDenials) > 0
+			if result.Output == "" && result.IsPermissionDenial {
+				result.Output = formatPermissionDenials(ev.PermissionDenials)
+			}
+			if ev.IsError {
+				duration := time.Since(start)
+				c.mu.Lock()
+				c.running = nil
+				c.execCount++
+				c.lastExecDuration = duration
+				c.mu.Unlock()
+				cmd.Wait()
+				errMsg := ev.Result
+				if errMsg == "" {
+					errMsg = "unknown error"
+				}
+				return ExecResult{SessionID: ev.SessionID}, fmt.Errorf("claude error: %s", errMsg)
+			}
+			gotResult = true
+		}
+	}
+
+	duration := time.Since(start)
+	waitErr := cmd.Wait()
+
+	c.mu.Lock()
+	c.running = nil
+	c.execCount++
+	c.lastExecDuration = duration
+	c.mu.Unlock()
+
+	if !gotResult {
+		if ctx.Err() == context.DeadlineExceeded {
+			return ExecResult{}, fmt.Errorf("execution timed out after %v", c.timeout)
+		}
+		if waitErr != nil {
+			return ExecResult{}, fmt.Errorf("claude error: %w\nstderr: %s", waitErr, stderr.String())
+		}
+		return ExecResult{}, fmt.Errorf("no result event in stream output")
+	}
+
+	return result, nil
 }

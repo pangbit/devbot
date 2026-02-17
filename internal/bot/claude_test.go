@@ -218,3 +218,119 @@ func TestClaudeExecCountIncrementsOnError(t *testing.T) {
 		t.Fatalf("expected positive duration after error, got %v", exec.LastExecDuration())
 	}
 }
+
+func TestClaudeExecStream_CollectsResult(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]},"session_id":"s1"}'
+echo '{"type":"result","subtype":"success","result":"Hello world","session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	var progTexts []string
+	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", func(text string) {
+		progTexts = append(progTexts, text)
+	})
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	if result.Output != "Hello world" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if result.SessionID != "s1" {
+		t.Fatalf("unexpected session ID: %q", result.SessionID)
+	}
+}
+
+func TestClaudeExecStream_Timeout(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\nsleep 10\n"), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 100*time.Millisecond)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected timeout error")
+	}
+}
+
+func TestClaudeExecStream_ErrorResult(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"something failed","is_error":true,"session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "something failed") {
+		t.Fatalf("expected error message, got: %v", err)
+	}
+}
+
+func TestClaudeExecStream_ProgressCallback(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"step 1"}]},"session_id":"s1"}'
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"step 2"}]},"session_id":"s1"}'
+echo '{"type":"result","result":"done","session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	var progTexts []string
+	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", func(text string) {
+		progTexts = append(progTexts, text)
+	})
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	if result.Output != "done" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if len(progTexts) < 2 {
+		t.Fatalf("expected at least 2 progress callbacks, got %d", len(progTexts))
+	}
+}
+
+func TestClaudeExecStream_PermissionDenial(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"","session_id":"s1","permission_denials":[{"tool_name":"Bash","tool_input":{}}]}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	if !result.IsPermissionDenial {
+		t.Fatalf("expected IsPermissionDenial=true")
+	}
+}
+
+func TestClaudeExecStream_CountAndDuration(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"ok","session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	before := exec.ExecCount()
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	if exec.ExecCount() != before+1 {
+		t.Fatalf("expected exec count to increment")
+	}
+	if exec.LastExecDuration() <= 0 {
+		t.Fatalf("expected positive duration")
+	}
+}
