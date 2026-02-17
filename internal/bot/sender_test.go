@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -76,5 +78,64 @@ func TestSplitMessage_CJK(t *testing.T) {
 	}
 	if reassembled != text {
 		t.Fatalf("reassembled CJK text does not match original")
+	}
+}
+
+func TestBuildCardBody(t *testing.T) {
+	card := CardMsg{Title: "Test", Content: "**Key:** value"}
+	body := buildCardBody(card)
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	jsonStr := string(data)
+
+	// Verify card structure
+	if !strings.Contains(jsonStr, `"plain_text"`) {
+		t.Fatalf("expected plain_text tag in header, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"Test"`) {
+		t.Fatalf("expected title in JSON, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"markdown"`) {
+		t.Fatalf("expected markdown tag in elements, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"**Key:** value"`) {
+		t.Fatalf("expected markdown content in JSON, got: %s", jsonStr)
+	}
+}
+
+func TestBuildCardBody_WithTemplate(t *testing.T) {
+	card := CardMsg{Title: "Error", Content: "something broke", Template: "red"}
+	body := buildCardBody(card)
+	header := body["header"].(map[string]interface{})
+	if header["template"] != "red" {
+		t.Fatalf("expected red template, got: %v", header["template"])
+	}
+}
+
+func TestBuildCardBody_NoTitle(t *testing.T) {
+	card := CardMsg{Content: "just markdown"}
+	body := buildCardBody(card)
+	if _, hasHeader := body["header"]; hasHeader {
+		t.Fatalf("expected no header when Title is empty")
+	}
+}
+
+func TestBuildCardBody_DefaultTemplate(t *testing.T) {
+	card := CardMsg{Title: "Status", Content: "ok"}
+	body := buildCardBody(card)
+	header := body["header"].(map[string]interface{})
+	if header["template"] != "blue" {
+		t.Fatalf("expected default blue template, got: %v", header["template"])
+	}
+}
+
+func TestSplitMessage(t *testing.T) {
+	// Existing SplitMessage function — verify it still works
+	chunks := SplitMessage("short", 100)
+	if len(chunks) != 1 || chunks[0] != "short" {
+		t.Fatalf("expected single chunk, got: %v", chunks)
 	}
 }

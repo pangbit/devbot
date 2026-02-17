@@ -103,3 +103,76 @@ func (s *LarkSender) SendTextChunked(ctx context.Context, chatID, text string) e
 	}
 	return nil
 }
+
+const MaxCardLen = 30000
+
+func buildCardBody(card CardMsg) map[string]interface{} {
+	body := map[string]interface{}{
+		"elements": []map[string]interface{}{
+			{
+				"tag":     "markdown",
+				"content": card.Content,
+			},
+		},
+	}
+	if card.Title != "" {
+		tmpl := card.Template
+		if tmpl == "" {
+			tmpl = "blue"
+		}
+		body["header"] = map[string]interface{}{
+			"title": map[string]interface{}{
+				"tag":     "plain_text",
+				"content": card.Title,
+			},
+			"template": tmpl,
+		}
+	}
+	return body
+}
+
+func (s *LarkSender) SendCard(ctx context.Context, chatID string, card CardMsg) error {
+	cardJSON, err := json.Marshal(buildCardBody(card))
+	if err != nil {
+		log.Printf("sender: failed to marshal card: %v", err)
+		return err
+	}
+
+	// If serialized card exceeds limit, fall back to plain text
+	if len(cardJSON) > MaxCardLen {
+		fallback := card.Content
+		if card.Title != "" {
+			fallback = card.Title + "\n\n" + card.Content
+		}
+		return s.SendTextChunked(ctx, chatID, fallback)
+	}
+
+	body := map[string]interface{}{
+		"receive_id": chatID,
+		"msg_type":   "interactive",
+		"content":    string(cardJSON),
+	}
+
+	resp, err := s.client.Post(
+		ctx,
+		"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+		body,
+		larkcore.AccessTokenTypeTenant,
+	)
+	if err != nil {
+		log.Printf("sender: SendCard failed chat=%s: %v", chatID, err)
+		return err
+	}
+	if resp != nil && resp.StatusCode != 200 {
+		log.Printf("sender: SendCard non-200 chat=%s status=%d body=%s", chatID, resp.StatusCode, string(resp.RawBody))
+	} else if resp != nil {
+		var codeErr struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if json.Unmarshal(resp.RawBody, &codeErr) == nil && codeErr.Code != 0 {
+			log.Printf("sender: SendCard API error chat=%s code=%d msg=%s", chatID, codeErr.Code, codeErr.Msg)
+		}
+	}
+	return nil
+}
