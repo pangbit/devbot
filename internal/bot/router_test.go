@@ -886,3 +886,26 @@ func TestRouterExecClaude_ErrorIsRedCard(t *testing.T) {
 		t.Fatalf("expected red Error card, got cards: %+v texts: %v", sender.cards, sender.texts)
 	}
 }
+
+func TestRouterExecClaude_PermissionDenialIsPurpleCard(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"\",\"session_id\":\"s1\",\"permission_denials\":[{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[{\"question\":\"Which option?\",\"options\":[{\"label\":\"A\",\"description\":\"First\"},{\"label\":\"B\",\"description\":\"Second\"}]}]}}]}'\n"), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "do something")
+
+	var found bool
+	for _, c := range sender.cards {
+		if c.Template == "purple" && strings.Contains(c.Content, "Which option?") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected purple card with question, got cards: %+v", sender.cards)
+	}
+}

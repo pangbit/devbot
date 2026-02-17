@@ -788,5 +788,9 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	if output == "" {
 		output = "(empty response)"
 	}
+	if result.IsPermissionDenial {
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 想确认", Content: output, Template: "purple"})
+		return
+	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
 }

@@ -13,8 +13,9 @@ import (
 )
 
 type ExecResult struct {
-	Output    string
-	SessionID string
+	Output             string
+	SessionID          string
+	IsPermissionDenial bool
 }
 
 type ClaudeExecutor struct {
@@ -113,6 +114,7 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 	// When result is empty but there are permission denials, extract the denied content
 	if output == "" && len(resp.PermissionDenials) > 0 {
 		output = formatPermissionDenials(resp.PermissionDenials)
+		return ExecResult{Output: output, SessionID: resp.SessionID, IsPermissionDenial: true}, nil
 	}
 	return ExecResult{Output: output, SessionID: resp.SessionID}, nil
 }
