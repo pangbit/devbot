@@ -688,6 +688,29 @@ func TestRouterExecClaude_NoQueue(t *testing.T) {
 	}
 }
 
+func TestRouterExecClaude_SavesSessionID(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"Hello!","session_id":"new-sess-456"}'
+`), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	sess := store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID != "new-sess-456" {
+		t.Fatalf("expected session ID 'new-sess-456', got: %q", sess.ClaudeSessionID)
+	}
+	if sess.LastOutput != "Hello!" {
+		t.Fatalf("expected LastOutput 'Hello!', got: %q", sess.LastOutput)
+	}
+}
+
 func TestRouterExecClaudeQueued_ShowsQueuePosition(t *testing.T) {
 	r, sender, q := newTestRouterForExec(t)
 	// Block the worker with a slow task

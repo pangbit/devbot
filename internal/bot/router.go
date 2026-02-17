@@ -795,6 +795,9 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 
 	r.store.UpdateSession(chatID, func(s *Session) {
 		s.LastOutput = result.Output
+		if result.SessionID != "" {
+			s.ClaudeSessionID = result.SessionID
+		}
 	})
 	r.save()
 
