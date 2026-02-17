@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -81,18 +82,25 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 		return ExecResult{}, fmt.Errorf("claude error: %w\nstderr: %s", err, stderr.String())
 	}
 
-	log.Printf("claude: raw output len=%d session=%s", stdout.Len(), sessionID)
+	rawOut := stdout.String()
+	log.Printf("claude: raw output len=%d session=%s", len(rawOut), sessionID)
+	if len(rawOut) < 3000 {
+		log.Printf("claude: raw json: %s", rawOut)
+	} else {
+		log.Printf("claude: raw json (truncated): %s", rawOut[:3000])
+	}
 
 	var resp struct {
-		Result    string `json:"result"`
-		SessionID string `json:"session_id"`
-		IsError   bool   `json:"is_error"`
-		Subtype   string `json:"subtype"`
+		Result           string `json:"result"`
+		SessionID        string `json:"session_id"`
+		IsError          bool   `json:"is_error"`
+		Subtype          string `json:"subtype"`
+		PermissionDenials []permissionDenial `json:"permission_denials"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		return ExecResult{}, fmt.Errorf("failed to parse claude response: %w\nraw: %s", err, stdout.String())
+	if err := json.Unmarshal([]byte(rawOut), &resp); err != nil {
+		return ExecResult{}, fmt.Errorf("failed to parse claude response: %w\nraw: %s", err, rawOut)
 	}
-	log.Printf("claude: parsed result_len=%d session_id=%s is_error=%v subtype=%s", len(resp.Result), resp.SessionID, resp.IsError, resp.Subtype)
+	log.Printf("claude: parsed result_len=%d session_id=%s is_error=%v subtype=%s denials=%d", len(resp.Result), resp.SessionID, resp.IsError, resp.Subtype, len(resp.PermissionDenials))
 	if resp.IsError {
 		errMsg := resp.Result
 		if errMsg == "" {
@@ -100,7 +108,13 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 		}
 		return ExecResult{SessionID: resp.SessionID}, fmt.Errorf("claude error: %s", errMsg)
 	}
-	return ExecResult{Output: resp.Result, SessionID: resp.SessionID}, nil
+
+	output := resp.Result
+	// When result is empty but there are permission denials, extract the denied content
+	if output == "" && len(resp.PermissionDenials) > 0 {
+		output = formatPermissionDenials(resp.PermissionDenials)
+	}
+	return ExecResult{Output: output, SessionID: resp.SessionID}, nil
 }
 
 func (c *ClaudeExecutor) Kill() error {
@@ -158,4 +172,48 @@ func (c *ClaudeExecutor) LastExecDuration() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastExecDuration
+}
+
+type permissionDenial struct {
+	ToolName  string          `json:"tool_name"`
+	ToolInput json.RawMessage `json:"tool_input"`
+}
+
+func formatPermissionDenials(denials []permissionDenial) string {
+	var sb strings.Builder
+	sb.WriteString("[Claude wanted to interact but couldn't in non-interactive mode]\n\n")
+	for _, d := range denials {
+		if d.ToolName == "AskUserQuestion" {
+			sb.WriteString(formatAskUserQuestion(d.ToolInput))
+		} else {
+			sb.WriteString(fmt.Sprintf("Blocked tool: %s\n", d.ToolName))
+		}
+	}
+	return sb.String()
+}
+
+func formatAskUserQuestion(input json.RawMessage) string {
+	var ask struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(input, &ask); err != nil {
+		return string(input)
+	}
+	var sb strings.Builder
+	for _, q := range ask.Questions {
+		sb.WriteString(q.Question)
+		sb.WriteByte('\n')
+		for i, opt := range q.Options {
+			sb.WriteString(fmt.Sprintf("  %d. %s — %s\n", i+1, opt.Label, opt.Description))
+		}
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("(Reply with your choice to continue)")
+	return sb.String()
 }
