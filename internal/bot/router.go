@@ -790,13 +790,13 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		if len(display) > 1000 {
 			display = "..." + display[len(display)-1000:]
 		}
-		title := fmt.Sprintf("Executing... (%ds)", int(elapsed.Seconds()))
-		r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: display, Template: "blue"})
+		r.sender.SendCard(ctx, chatID, CardMsg{Content: display})
 	}
 
 	result, err := r.executor.ExecStream(ctx, prompt, workDir, sessionID, permMode, model, onProgress)
+	elapsed := time.Since(startTime).Truncate(time.Second)
 	if err != nil {
-		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Error", Content: fmt.Sprintf("%v", err), Template: "red"})
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Error (%s)", elapsed), Content: fmt.Sprintf("%v", err), Template: "red"})
 		return
 	}
 
@@ -817,4 +817,5 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		return
 	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Done (%s)", elapsed), Template: "green"})
 }

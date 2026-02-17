@@ -827,16 +827,23 @@ func TestRouterExecClaude_ResponseIsCard(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "hello")
 
-	if len(sender.cards) < 1 {
-		t.Fatalf("expected at least 1 card, got %d: %+v", len(sender.cards), sender.cards)
+	if len(sender.cards) < 2 {
+		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
 	}
-	// Result card: response (no title)
+	// First card: response (no title)
+	if sender.cards[0].Title != "" {
+		t.Fatalf("expected no title on response card, got: %q", sender.cards[0].Title)
+	}
+	if !strings.Contains(sender.cards[0].Content, "**bold**") {
+		t.Fatalf("expected markdown content, got: %q", sender.cards[0].Content)
+	}
+	// Last card: Done
 	last := sender.cards[len(sender.cards)-1]
-	if last.Title != "" {
-		t.Fatalf("expected no title on response card, got: %q", last.Title)
+	if !strings.Contains(last.Title, "Done") {
+		t.Fatalf("expected Done card, got: %q", last.Title)
 	}
-	if !strings.Contains(last.Content, "**bold**") {
-		t.Fatalf("expected markdown content, got: %q", last.Content)
+	if last.Template != "green" {
+		t.Fatalf("expected green template, got: %q", last.Template)
 	}
 }
 
@@ -854,7 +861,7 @@ func TestRouterExecClaude_ErrorIsRedCard(t *testing.T) {
 
 	var found bool
 	for _, c := range sender.cards {
-		if c.Title == "Error" && c.Template == "red" {
+		if strings.HasPrefix(c.Title, "Error") && c.Template == "red" {
 			found = true
 		}
 	}
@@ -903,14 +910,18 @@ echo '{"type":"result","result":"Final answer","session_id":"s1"}'
 
 	r.Route(context.Background(), "chat1", "user1", "hello")
 
-	// Fast execution: only the final result card (no Executing... card)
-	if len(sender.cards) < 1 {
-		t.Fatalf("expected at least 1 card, got %d: %+v", len(sender.cards), sender.cards)
+	// Result card + Done card
+	if len(sender.cards) < 2 {
+		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
 	}
-	// Last card: final result
+	// First card: result with content
+	if !strings.Contains(sender.cards[0].Content, "Final answer") {
+		t.Fatalf("expected final answer in result card, got: %q", sender.cards[0].Content)
+	}
+	// Last card: Done
 	last := sender.cards[len(sender.cards)-1]
-	if !strings.Contains(last.Content, "Final answer") {
-		t.Fatalf("expected final answer in last card, got: %q", last.Content)
+	if !strings.Contains(last.Title, "Done") {
+		t.Fatalf("expected Done card, got: %q", last.Title)
 	}
 }
 
