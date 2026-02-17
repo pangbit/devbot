@@ -332,6 +332,10 @@ func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessio
 				if errMsg == "" {
 					errMsg = "unknown error"
 				}
+				if stderrStr := stderr.String(); stderrStr != "" {
+					log.Printf("claude stream: stderr: %s", stderrStr)
+					return ExecResult{SessionID: ev.SessionID}, fmt.Errorf("claude error: %s\nstderr: %s", errMsg, stderrStr)
+				}
 				return ExecResult{SessionID: ev.SessionID}, fmt.Errorf("claude error: %s", errMsg)
 			}
 			gotResult = true

@@ -840,6 +840,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	result, err := r.executor.ExecStream(ctx, prompt, workDir, sessionID, permMode, model, onProgress)
 	elapsed := time.Since(startTime).Truncate(time.Second)
 	if err != nil {
+		log.Printf("router: execClaude error chat=%s elapsed=%s: %v", chatID, elapsed, err)
 		r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Error (%s)", elapsed), Content: fmt.Sprintf("%v", err), Template: "red"})
 		return
 	}
