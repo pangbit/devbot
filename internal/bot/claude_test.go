@@ -167,6 +167,41 @@ echo '{"type":"result","result":"Hello from Claude","session_id":"sess-abc-123"}
 	}
 }
 
+func TestClaudeExecInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho 'not valid json'\n"), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	if err == nil {
+		t.Fatalf("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse") {
+		t.Fatalf("expected parse error, got: %v", err)
+	}
+}
+
+func TestClaudeExecEmptySessionID(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"Hello"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	if result.Output != "Hello" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if result.SessionID != "" {
+		t.Fatalf("expected empty session ID, got: %q", result.SessionID)
+	}
+}
+
 func TestClaudeExecCountIncrementsOnError(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
