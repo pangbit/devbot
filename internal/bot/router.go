@@ -299,7 +299,17 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		return
 	}
 	r.store.UpdateSession(chatID, func(s *Session) {
+		// Save current dir's session before switching
+		if s.DirSessions == nil {
+			s.DirSessions = make(map[string]string)
+		}
+		if s.ClaudeSessionID != "" && s.WorkDir != "" {
+			s.DirSessions[s.WorkDir] = s.ClaudeSessionID
+		}
+		// Restore session for the new directory (empty string = new session)
+		s.ClaudeSessionID = s.DirSessions[target]
 		s.WorkDir = target
+		s.LastOutput = ""
 	})
 	r.save()
 	r.sender.SendText(ctx, chatID, "Changed to: "+target)
@@ -828,7 +838,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		}
 
 		lastSendTime = now
-		display := strings.TrimLeft(text, " \t\r\n")
+		display := strings.TrimSpace(text)
 		runes := []rune(display)
 		if len(runes) > 4000 {
 			display = "（内容过长，仅显示最新部分）\n\n" + string(runes[len(runes)-4000:])
@@ -840,6 +850,19 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	result, err := r.executor.ExecStream(ctx, prompt, workDir, sessionID, permMode, model, onProgress)
 	elapsed := time.Since(startTime).Truncate(time.Second)
 	if err != nil {
+		// Auto-recover: if Claude session no longer exists, clear it and retry without --resume
+		if sessionID != "" && strings.Contains(err.Error(), "No conversation found with session ID") {
+			log.Printf("router: session %s not found, clearing and retrying without resume (chat=%s)", sessionID, chatID)
+			r.store.UpdateSession(chatID, func(s *Session) {
+				s.History = append(s.History, s.ClaudeSessionID)
+				s.ClaudeSessionID = ""
+			})
+			r.save()
+			result, err = r.executor.ExecStream(ctx, prompt, workDir, "", permMode, model, onProgress)
+			elapsed = time.Since(startTime).Truncate(time.Second)
+		}
+	}
+	if err != nil {
 		log.Printf("router: execClaude error chat=%s elapsed=%s: %v", chatID, elapsed, err)
 		r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Error (%s)", elapsed), Content: fmt.Sprintf("%v", err), Template: "red"})
 		return
@@ -849,6 +872,13 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		s.LastOutput = result.Output
 		if result.SessionID != "" {
 			s.ClaudeSessionID = result.SessionID
+			// Keep dir→session map in sync
+			if s.DirSessions == nil {
+				s.DirSessions = make(map[string]string)
+			}
+			if s.WorkDir != "" {
+				s.DirSessions[s.WorkDir] = result.SessionID
+			}
 		}
 	})
 	r.save()
@@ -857,11 +887,13 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	if output == "" {
 		output = "(empty response)"
 	}
+	output = strings.TrimSpace(output)
 	if result.IsPermissionDenial {
-		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 想确认", Content: output, Template: "purple"})
+		if output != lastProgressContent {
+			r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 想确认", Content: output, Template: "purple"})
+		}
 		return
 	}
-	output = strings.TrimLeft(output, " \t\r\n")
 	// Skip result card if identical to the last progress card
 	if output != lastProgressContent {
 		r.sender.SendCard(ctx, chatID, CardMsg{Content: output})

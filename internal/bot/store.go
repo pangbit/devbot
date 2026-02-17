@@ -8,12 +8,13 @@ import (
 )
 
 type Session struct {
-	ClaudeSessionID string   `json:"claudeSessionID,omitempty"`
-	WorkDir         string   `json:"workDir,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	PermissionMode  string   `json:"permissionMode,omitempty"`
-	History         []string `json:"history,omitempty"`
-	LastOutput      string   `json:"lastOutput,omitempty"`
+	ClaudeSessionID string            `json:"claudeSessionID,omitempty"`
+	WorkDir         string            `json:"workDir,omitempty"`
+	Model           string            `json:"model,omitempty"`
+	PermissionMode  string            `json:"permissionMode,omitempty"`
+	History         []string          `json:"history,omitempty"`
+	LastOutput      string            `json:"lastOutput,omitempty"`
+	DirSessions     map[string]string `json:"dirSessions,omitempty"`
 }
 
 type State struct {

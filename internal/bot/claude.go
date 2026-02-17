@@ -228,6 +228,7 @@ type streamEvent struct {
 	Subtype           string             `json:"subtype"`
 	PermissionDenials []permissionDenial `json:"permission_denials"`
 	Message           json.RawMessage    `json:"message"`
+	Errors            []string           `json:"errors"`
 }
 
 func extractAssistantText(msg json.RawMessage) string {
@@ -332,6 +333,9 @@ func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessio
 				c.mu.Unlock()
 				log.Printf("claude stream: error result raw: %s", string(line))
 				errMsg := ev.Result
+				if errMsg == "" && len(ev.Errors) > 0 {
+					errMsg = strings.Join(ev.Errors, "; ")
+				}
 				if errMsg == "" {
 					errMsg = "unknown error"
 				}
