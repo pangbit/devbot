@@ -773,6 +773,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 
 	startTime := time.Now()
 	var lastSendTime time.Time
+	var lastProgressContent string
 
 	onProgress := func(text string) {
 		now := time.Now()
@@ -792,6 +793,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		if len(display) > 1000 {
 			display = "..." + display[len(display)-1000:]
 		}
+		lastProgressContent = display
 		r.sender.SendCard(ctx, chatID, CardMsg{Content: display})
 	}
 
@@ -819,6 +821,9 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		return
 	}
 	output = strings.TrimLeft(output, " \t\r\n")
-	r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
+	// Skip result card if identical to the last progress card
+	if output != lastProgressContent {
+		r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
+	}
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("Done (%s)", elapsed))
 }
