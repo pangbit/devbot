@@ -87,10 +87,12 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 		Result    string `json:"result"`
 		SessionID string `json:"session_id"`
 		IsError   bool   `json:"is_error"`
+		Subtype   string `json:"subtype"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		return ExecResult{}, fmt.Errorf("failed to parse claude response: %w\nraw: %s", err, stdout.String())
 	}
+	log.Printf("claude: parsed result_len=%d session_id=%s is_error=%v subtype=%s", len(resp.Result), resp.SessionID, resp.IsError, resp.Subtype)
 	if resp.IsError {
 		errMsg := resp.Result
 		if errMsg == "" {
