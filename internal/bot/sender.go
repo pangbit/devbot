@@ -4,6 +4,7 @@ import (
     "context"
     "encoding/json"
     "log"
+    "strings"
     "unicode/utf8"
 
     lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -107,11 +108,12 @@ func (s *LarkSender) SendTextChunked(ctx context.Context, chatID, text string) e
 const MaxCardLen = 30000
 
 func buildCardBody(card CardMsg) map[string]interface{} {
+	content := strings.TrimLeft(card.Content, " \t\r\n")
 	body := map[string]interface{}{
 		"elements": []map[string]interface{}{
 			{
 				"tag":     "markdown",
-				"content": card.Content,
+				"content": content,
 			},
 		},
 	}

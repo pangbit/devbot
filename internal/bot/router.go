@@ -788,7 +788,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		}
 
 		lastSendTime = now
-		display := strings.TrimLeft(text, "\n")
+		display := strings.TrimLeft(text, " \t\r\n")
 		if len(display) > 1000 {
 			display = "..." + display[len(display)-1000:]
 		}
@@ -818,7 +818,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 想确认", Content: output, Template: "purple"})
 		return
 	}
-	output = strings.TrimLeft(output, "\n")
+	output = strings.TrimLeft(output, " \t\r\n")
 	r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("Done (%s)", elapsed))
 }
