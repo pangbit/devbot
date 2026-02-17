@@ -16,6 +16,7 @@ import (
 type Sender interface {
 	SendText(ctx context.Context, chatID, text string) error
 	SendTextChunked(ctx context.Context, chatID, text string) error
+	SendCard(ctx context.Context, chatID string, card CardMsg) error
 }
 
 type MessageRouter interface {

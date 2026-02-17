@@ -770,7 +770,34 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	if permMode == "" {
 		permMode = "safe"
 	}
-	result, err := r.executor.Exec(ctx, prompt, workDir, sessionID, permMode, model)
+
+	startTime := time.Now()
+	var lastSendTime time.Time
+
+	onProgress := func(text string) {
+		now := time.Now()
+		elapsed := now.Sub(startTime)
+		sinceLast := now.Sub(lastSendTime)
+
+		// Don't send progress in first 3 seconds (likely fast)
+		// After that, send every 5 seconds
+		if elapsed < 3*time.Second {
+			return
+		}
+		if sinceLast < 5*time.Second {
+			return
+		}
+
+		lastSendTime = now
+		display := text
+		if len(display) > 1000 {
+			display = "..." + display[len(display)-1000:]
+		}
+		title := fmt.Sprintf("Executing... (%ds)", int(elapsed.Seconds()))
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: display, Template: "blue"})
+	}
+
+	result, err := r.executor.ExecStream(ctx, prompt, workDir, sessionID, permMode, model, onProgress)
 	if err != nil {
 		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Error", Content: fmt.Sprintf("%v", err), Template: "red"})
 		return

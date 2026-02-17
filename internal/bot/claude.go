@@ -322,12 +322,12 @@ func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessio
 			}
 			if ev.IsError {
 				duration := time.Since(start)
+				cmd.Wait()
 				c.mu.Lock()
 				c.running = nil
 				c.execCount++
 				c.lastExecDuration = duration
 				c.mu.Unlock()
-				cmd.Wait()
 				errMsg := ev.Result
 				if errMsg == "" {
 					errMsg = "unknown error"

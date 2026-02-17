@@ -909,3 +909,58 @@ func TestRouterExecClaude_PermissionDenialIsPurpleCard(t *testing.T) {
 		t.Fatalf("expected purple card with question, got cards: %+v", sender.cards)
 	}
 }
+
+func TestRouterExecClaude_StreamProgressCards(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// Simulate streaming: two assistant events, then result
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Working on it..."}]},"session_id":"s1"}'
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Almost done..."}]},"session_id":"s1"}'
+echo '{"type":"result","result":"Final answer","session_id":"s1"}'
+`), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	// Should have: Executing... card, then final result card
+	if len(sender.cards) < 2 {
+		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
+	}
+	// First card: Executing...
+	if sender.cards[0].Title != "Executing..." {
+		t.Fatalf("expected Executing..., got: %q", sender.cards[0].Title)
+	}
+	// Last card: final result
+	last := sender.cards[len(sender.cards)-1]
+	if !strings.Contains(last.Content, "Final answer") {
+		t.Fatalf("expected final answer in last card, got: %q", last.Content)
+	}
+}
+
+func TestRouterExecClaude_StreamSavesSessionAndOutput(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"streamed result","session_id":"stream-sess-1"}'
+`), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	sess := store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID != "stream-sess-1" {
+		t.Fatalf("expected session ID 'stream-sess-1', got: %q", sess.ClaudeSessionID)
+	}
+	if sess.LastOutput != "streamed result" {
+		t.Fatalf("expected LastOutput 'streamed result', got: %q", sess.LastOutput)
+	}
+}

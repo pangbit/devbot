@@ -89,6 +89,11 @@ func (f *fakeSender) SendTextChunked(_ context.Context, _, text string) error {
 	return nil
 }
 
+func (f *fakeSender) SendCard(_ context.Context, _ string, card CardMsg) error {
+	f.messages = append(f.messages, card.Title+"\n\n"+card.Content)
+	return nil
+}
+
 func makeEvent(senderType, senderID, chatID, chatType, msgType, content string, mentions []map[string]interface{}) []byte {
 	return makeEventWithMsgID(senderType, senderID, chatID, chatType, msgType, content, "", mentions)
 }

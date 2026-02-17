@@ -228,10 +228,7 @@ echo '{"type":"result","subtype":"success","result":"Hello world","session_id":"
 `), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
-	var progTexts []string
-	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", func(text string) {
-		progTexts = append(progTexts, text)
-	})
+	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
 	if err != nil {
 		t.Fatalf("ExecStream error: %v", err)
 	}
