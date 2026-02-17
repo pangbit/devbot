@@ -19,11 +19,17 @@ type Sender interface {
 	SendCard(ctx context.Context, chatID string, card CardMsg) error
 }
 
+type ImageAttachment struct {
+	Data     []byte
+	FileName string
+}
+
 type MessageRouter interface {
 	Route(ctx context.Context, chatID, userID, text string)
 	RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string)
 	RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte)
 	RouteDocShare(ctx context.Context, chatID, userID, docID string)
+	RouteTextWithImages(ctx context.Context, chatID, userID, text string, images []ImageAttachment)
 }
 
 // Downloader downloads images and files from Feishu.
@@ -88,6 +94,19 @@ type fileContent struct {
 	FileName string `json:"file_name"`
 }
 
+// postContent represents the Feishu post (rich text) message structure.
+type postContent struct {
+	Title   string          `json:"title"`
+	Content [][]postElement `json:"content"`
+}
+
+type postElement struct {
+	Tag      string `json:"tag"`
+	Text     string `json:"text,omitempty"`
+	ImageKey string `json:"image_key,omitempty"`
+	Href     string `json:"href,omitempty"`
+}
+
 func NewHandler(router MessageRouter, downloader Downloader, sender Sender, skipBotSelf bool, botID string, allowedUsers map[string]bool) *Handler {
 	return &Handler{
 		router:       router,
@@ -147,6 +166,8 @@ func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiv
 		// Rich text messages — extract doc URL if present
 		if docID := extractDocID(env.Event.Message.Content); docID != "" {
 			h.router.RouteDocShare(ctx, chatID, userID, docID)
+		} else {
+			h.handlePost(ctx, chatID, userID, messageID, env)
 		}
 
 	case "interactive":
@@ -290,6 +311,99 @@ func (h *Handler) cleanMentions(text string, env eventEnvelope) string {
 		text = strings.ReplaceAll(text, m.Key, "")
 	}
 	return strings.TrimSpace(text)
+}
+
+// handlePost extracts text and images from a Feishu post (rich text) message.
+func (h *Handler) handlePost(ctx context.Context, chatID, userID, messageID string, env eventEnvelope) {
+	var pc postContent
+	if err := json.Unmarshal([]byte(env.Event.Message.Content), &pc); err != nil {
+		log.Printf("handler: failed to parse post content: %v", err)
+		return
+	}
+
+	// Collect text and image keys from all paragraphs
+	var texts []string
+	var imageKeys []string
+	for _, para := range pc.Content {
+		for _, elem := range para {
+			switch elem.Tag {
+			case "text":
+				if t := strings.TrimSpace(elem.Text); t != "" {
+					texts = append(texts, t)
+				}
+			case "img":
+				if elem.ImageKey != "" {
+					imageKeys = append(imageKeys, elem.ImageKey)
+				}
+			case "a":
+				if t := strings.TrimSpace(elem.Text); t != "" {
+					texts = append(texts, t)
+				}
+			}
+		}
+	}
+	if pc.Title != "" {
+		texts = append([]string{pc.Title}, texts...)
+	}
+
+	text := h.cleanMentions(strings.Join(texts, "\n"), env)
+
+	// Download images
+	var images []ImageAttachment
+	for _, key := range imageKeys {
+		if att := h.downloadPostImageData(ctx, chatID, messageID, key); att != nil {
+			images = append(images, *att)
+		}
+	}
+
+	if text == "" && len(images) == 0 {
+		return
+	}
+
+	if len(images) == 0 {
+		// Text-only post, route as plain text
+		h.router.Route(ctx, chatID, userID, text)
+	} else {
+		// Has images (with or without text)
+		h.router.RouteTextWithImages(ctx, chatID, userID, text, images)
+	}
+}
+
+// downloadPostImageData downloads an image from a post message and returns the data.
+func (h *Handler) downloadPostImageData(ctx context.Context, chatID, messageID, imageKey string) *ImageAttachment {
+	if h.downloader == nil {
+		log.Println("handler: downloader not configured, cannot download image")
+		return nil
+	}
+
+	reader, err := h.downloader.DownloadImage(ctx, messageID, imageKey)
+	if err != nil {
+		log.Printf("handler: failed to download post image %s: %v", imageKey, err)
+		return nil
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(io.LimitReader(reader, maxImageSize+1))
+	if err != nil {
+		log.Printf("handler: failed to read post image data: %v", err)
+		return nil
+	}
+	if len(data) > maxImageSize {
+		log.Printf("handler: post image %s exceeds max size", imageKey)
+		return nil
+	}
+
+	ext := ".png"
+	switch ct := http.DetectContentType(data); {
+	case strings.HasPrefix(ct, "image/jpeg"):
+		ext = ".jpg"
+	case strings.HasPrefix(ct, "image/gif"):
+		ext = ".gif"
+	case strings.HasPrefix(ct, "image/webp"):
+		ext = ".webp"
+	}
+
+	return &ImageAttachment{Data: data, FileName: imageKey + ext}
 }
 
 // extractDocID finds the first Feishu doc URL in text and returns the document ID.

@@ -716,6 +716,45 @@ func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageDat
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+func (r *Router) RouteTextWithImages(ctx context.Context, chatID, userID, text string, images []ImageAttachment) {
+	if !r.allowedUsers[userID] {
+		return
+	}
+
+	session := r.getSession(chatID)
+
+	// Save all images to work directory
+	imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+	if err := os.MkdirAll(imgDir, 0755); err != nil {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to create image directory: %v", err))
+		return
+	}
+
+	var savedPaths []string
+	for _, img := range images {
+		imgPath := filepath.Join(imgDir, filepath.Base(img.FileName))
+		if err := os.WriteFile(imgPath, img.Data, 0644); err != nil {
+			log.Printf("router: failed to save image %s: %v", img.FileName, err)
+			continue
+		}
+		savedPaths = append(savedPaths, imgPath)
+	}
+
+	// Build prompt combining text and image paths
+	var prompt string
+	if text != "" && len(savedPaths) > 0 {
+		prompt = text + "\n\nAttached images: " + strings.Join(savedPaths, ", ")
+	} else if text != "" {
+		prompt = text
+	} else if len(savedPaths) > 0 {
+		prompt = fmt.Sprintf("User sent an image, saved to: %s. Describe or process this image as needed.", savedPaths[0])
+	} else {
+		return
+	}
+
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
 func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte) {
 	if !r.allowedUsers[userID] {
 		return
@@ -790,8 +829,9 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 
 		lastSendTime = now
 		display := strings.TrimLeft(text, " \t\r\n")
-		if len(display) > 1000 {
-			display = "..." + display[len(display)-1000:]
+		runes := []rune(display)
+		if len(runes) > 4000 {
+			display = "（内容过长，仅显示最新部分）\n\n" + string(runes[len(runes)-4000:])
 		}
 		lastProgressContent = display
 		r.sender.SendCard(ctx, chatID, CardMsg{Content: display})

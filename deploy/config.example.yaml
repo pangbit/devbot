@@ -1,0 +1,31 @@
+# DevBot 配置文件
+# 配置优先级: 命令行参数 > 配置文件 > 环境变量
+
+# 飞书应用凭证 (必填)
+app_id: ""
+app_secret: ""
+
+# 允许使用的用户 ID 列表 (必填，支持 open_id 和 user_id)
+allowed_user_ids:
+  - "ou_xxx"
+
+# Bot Open ID，用于群聊中 @bot 检测 (可选)
+bot_open_id: ""
+
+# 工作目录根路径 (默认: $HOME)
+work_root: "/opt/devbot/workspace"
+
+# Claude CLI 路径 (默认: claude)
+claude_path: "claude"
+
+# Claude 模型 (默认: sonnet)
+claude_model: "sonnet"
+
+# Claude 执行超时秒数 (默认: 600)
+claude_timeout: 600
+
+# 状态持久化文件路径 (默认: ~/.devbot/state.json)
+state_file: "/opt/devbot/state.json"
+
+# 是否忽略 bot 自身的消息 (默认: true)
+skip_bot_self: true

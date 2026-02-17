@@ -21,6 +21,7 @@ type fakeRouter struct {
 	fileData  []byte
 	fileName  string
 	docID     string
+	images    []ImageAttachment
 }
 
 func (f *fakeRouter) Route(_ context.Context, chatID, userID, text string) {
@@ -51,6 +52,14 @@ func (f *fakeRouter) RouteDocShare(_ context.Context, chatID, userID, docID stri
 	f.chatID = chatID
 	f.userID = userID
 	f.docID = docID
+}
+
+func (f *fakeRouter) RouteTextWithImages(_ context.Context, chatID, userID, text string, images []ImageAttachment) {
+	f.called = true
+	f.chatID = chatID
+	f.userID = userID
+	f.text = text
+	f.images = images
 }
 
 type fakeDownloader struct {
@@ -442,7 +451,7 @@ func TestHandleMessage_PostWithDocURL(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_PostWithoutDocURL(t *testing.T) {
+func TestHandleMessage_PostWithText(t *testing.T) {
 	postContent := `{"content":[[{"tag":"text","text":"just some text"}]]}`
 	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
 	var evt larkim.P2MessageReceiveV1
@@ -452,8 +461,11 @@ func TestHandleMessage_PostWithoutDocURL(t *testing.T) {
 	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 	h.HandleMessage(context.Background(), &evt)
 
-	if router.called {
-		t.Fatalf("expected router not called for post without doc URL")
+	if !router.called {
+		t.Fatalf("expected router to be called for post with text")
+	}
+	if router.text != "just some text" {
+		t.Fatalf("expected text 'just some text', got %q", router.text)
 	}
 }
 
@@ -550,6 +562,92 @@ func TestHandleMessage_PrefersOpenID(t *testing.T) {
 	}
 	if router.userID != "ou_abc123" {
 		t.Fatalf("expected open_id 'ou_abc123', got: %q", router.userID)
+	}
+}
+
+func TestHandleMessage_PostWithTextAndImage(t *testing.T) {
+	postContent := `{"content":[[{"tag":"text","text":"fix this bug"}],[{"tag":"img","image_key":"img_abc123"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_010", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	imgData := []byte("fake-png-data")
+	dl := &fakeDownloader{imageData: imgData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for post with text+image")
+	}
+	if router.text != "fix this bug" {
+		t.Fatalf("expected text 'fix this bug', got %q", router.text)
+	}
+	if len(router.images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(router.images))
+	}
+	if !bytes.Equal(router.images[0].Data, imgData) {
+		t.Fatalf("image data mismatch")
+	}
+}
+
+func TestHandleMessage_PostWithImageOnly(t *testing.T) {
+	postContent := `{"content":[[{"tag":"img","image_key":"img_xyz"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_011", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	imgData := []byte("fake-png-data")
+	dl := &fakeDownloader{imageData: imgData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for post with image")
+	}
+	if router.text != "" {
+		t.Fatalf("expected empty text, got %q", router.text)
+	}
+	if len(router.images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(router.images))
+	}
+}
+
+func TestHandleMessage_PostWithImageNoDownloader(t *testing.T) {
+	postContent := `{"content":[[{"tag":"text","text":"check this"}],[{"tag":"img","image_key":"img_abc"}]]}`
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	// Should still route the text, just without images
+	if !router.called {
+		t.Fatalf("expected router to be called with text even without downloader")
+	}
+	if router.text != "check this" {
+		t.Fatalf("expected text 'check this', got %q", router.text)
+	}
+}
+
+func TestHandleMessage_PostWithTitle(t *testing.T) {
+	postContent := `{"title":"Bug Report","content":[[{"tag":"text","text":"details here"}]]}`
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called")
+	}
+	if router.text != "Bug Report\ndetails here" {
+		t.Fatalf("expected title+text, got %q", router.text)
 	}
 }
 

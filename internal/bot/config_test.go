@@ -2,6 +2,7 @@ package bot
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -95,5 +96,134 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	}
 	if cfg.SkipBotSelf {
 		t.Fatalf("SkipBotSelf should be false")
+	}
+}
+
+func TestLoadConfigFromYAML(t *testing.T) {
+	// Clear env vars so YAML is the sole source
+	t.Setenv("DEVBOT_APP_ID", "")
+	t.Setenv("DEVBOT_APP_SECRET", "")
+	t.Setenv("DEVBOT_ALLOWED_USER_IDS", "")
+
+	yamlContent := `
+app_id: "yaml_app"
+app_secret: "yaml_secret"
+allowed_user_ids:
+  - "user_a"
+  - "user_b"
+work_root: "/yaml/work"
+claude_path: "/yaml/claude"
+claude_model: "haiku"
+claude_timeout: 120
+state_file: "/yaml/state.json"
+bot_open_id: "bot_yaml"
+skip_bot_self: false
+`
+	tmpFile := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(tmpFile, []byte(yamlContent), 0644)
+
+	cfg, err := LoadConfigFrom(tmpFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AppID != "yaml_app" {
+		t.Fatalf("AppID: got %q", cfg.AppID)
+	}
+	if cfg.AppSecret != "yaml_secret" {
+		t.Fatalf("AppSecret mismatch")
+	}
+	if len(cfg.AllowedUserIDs) != 2 || !cfg.AllowedUserIDs["user_a"] || !cfg.AllowedUserIDs["user_b"] {
+		t.Fatalf("AllowedUserIDs mismatch: %v", cfg.AllowedUserIDs)
+	}
+	if cfg.WorkRoot != "/yaml/work" {
+		t.Fatalf("WorkRoot: got %q", cfg.WorkRoot)
+	}
+	if cfg.ClaudePath != "/yaml/claude" {
+		t.Fatalf("ClaudePath: got %q", cfg.ClaudePath)
+	}
+	if cfg.ClaudeModel != "haiku" {
+		t.Fatalf("ClaudeModel: got %q", cfg.ClaudeModel)
+	}
+	if cfg.ClaudeTimeout != 120 {
+		t.Fatalf("ClaudeTimeout: got %d", cfg.ClaudeTimeout)
+	}
+	if cfg.StateFile != "/yaml/state.json" {
+		t.Fatalf("StateFile: got %q", cfg.StateFile)
+	}
+	if cfg.BotOpenID != "bot_yaml" {
+		t.Fatalf("BotOpenID: got %q", cfg.BotOpenID)
+	}
+	if cfg.SkipBotSelf {
+		t.Fatalf("SkipBotSelf should be false")
+	}
+}
+
+func TestLoadConfigYAMLOverridesEnv(t *testing.T) {
+	// Set env vars that should be overridden by YAML
+	t.Setenv("DEVBOT_APP_ID", "env_app")
+	t.Setenv("DEVBOT_APP_SECRET", "env_secret")
+	t.Setenv("DEVBOT_ALLOWED_USER_IDS", "env_user")
+	t.Setenv("DEVBOT_CLAUDE_MODEL", "env_model")
+
+	yamlContent := `
+app_id: "yaml_app"
+app_secret: "yaml_secret"
+allowed_user_ids:
+  - "yaml_user"
+claude_model: "yaml_model"
+`
+	tmpFile := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(tmpFile, []byte(yamlContent), 0644)
+
+	cfg, err := LoadConfigFrom(tmpFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// YAML values should win
+	if cfg.AppID != "yaml_app" {
+		t.Fatalf("expected YAML app_id, got %q", cfg.AppID)
+	}
+	if cfg.ClaudeModel != "yaml_model" {
+		t.Fatalf("expected YAML model, got %q", cfg.ClaudeModel)
+	}
+	if !cfg.AllowedUserIDs["yaml_user"] || cfg.AllowedUserIDs["env_user"] {
+		t.Fatalf("expected YAML user IDs, got %v", cfg.AllowedUserIDs)
+	}
+}
+
+func TestLoadConfigYAMLPartialWithEnvFallback(t *testing.T) {
+	// YAML only has app_id/secret, rest from env
+	t.Setenv("DEVBOT_APP_ID", "")
+	t.Setenv("DEVBOT_APP_SECRET", "")
+	t.Setenv("DEVBOT_ALLOWED_USER_IDS", "env_user")
+	t.Setenv("DEVBOT_CLAUDE_MODEL", "env_model")
+
+	yamlContent := `
+app_id: "yaml_app"
+app_secret: "yaml_secret"
+`
+	tmpFile := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(tmpFile, []byte(yamlContent), 0644)
+
+	cfg, err := LoadConfigFrom(tmpFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AppID != "yaml_app" {
+		t.Fatalf("AppID: got %q", cfg.AppID)
+	}
+	// Env fallback for allowed_user_ids and claude_model
+	if !cfg.AllowedUserIDs["env_user"] {
+		t.Fatalf("expected env user IDs fallback, got %v", cfg.AllowedUserIDs)
+	}
+	if cfg.ClaudeModel != "env_model" {
+		t.Fatalf("expected env model fallback, got %q", cfg.ClaudeModel)
+	}
+}
+
+func TestLoadConfigFromMissingFile(t *testing.T) {
+	_, err := LoadConfigFrom("/nonexistent/config.yaml")
+	if err == nil {
+		t.Fatalf("expected error for missing config file")
 	}
 }

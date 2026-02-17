@@ -1,0 +1,16 @@
+[Unit]
+Description=DevBot - Feishu Claude Code Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/devbot
+ExecStart=/opt/devbot/devbot -c /opt/devbot/config.yaml
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=append:/opt/devbot/devbot.log
+StandardError=append:/opt/devbot/devbot.log
+
+[Install]
+WantedBy=multi-user.target
