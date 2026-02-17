@@ -139,53 +139,44 @@ func (r *Router) getSession(chatID string) Session {
 }
 
 func (r *Router) cmdHelp(ctx context.Context, chatID string) {
-	help := `Available commands:
-
-Basic:
-  /help        -- Show this help
-  /ping        -- Check if bot is alive
-  /status      -- Show current status and Claude usage
-
-Directory:
-  /root <path> -- Set root work directory
-  /cd <dir>    -- Change directory (relative to root)
-  /pwd         -- Show current directory
-  /ls          -- List projects in root directory
-
-Git:
-  /git <args>  -- Run git command
-  /diff        -- Show current changes
-  /commit <msg>-- Quick commit
-  /push        -- Quick push
-  /undo        -- Discard uncommitted changes
-  /stash [pop] -- Stash/restore changes
-
-Session:
-  /new         -- Start new Claude session
-  /sessions    -- List session history
-  /switch <id> -- Switch to session
-
-Control:
-  /kill        -- Terminate current execution
-  /model <name>-- Switch Claude model
-  /yolo        -- Enable unrestricted mode
-  /safe        -- Restore safe mode
-  /last        -- Show last Claude output
-  /summary     -- Summarize last output
-
-System:
-  /sh <cmd>    -- Run shell command (via Claude)
-  /file <path> -- Send project file to chat
-
-Docs:
-  /doc push <path>  -- Push Markdown to Feishu doc
-  /doc pull <path>  -- Pull shared doc to project
-  /doc bind <path> <url|id> -- Bind file to Feishu doc
-  /doc unbind <path>       -- Unbind
-  /doc list         -- List bindings
-
-Any other message is sent directly to Claude as a prompt.`
-	r.sender.SendText(ctx, chatID, help)
+	md := "**Basic:**\n" +
+		"`/help`  Show this help\n" +
+		"`/ping`  Check if bot is alive\n" +
+		"`/status`  Show current status and Claude usage\n\n" +
+		"**Directory:**\n" +
+		"`/root <path>`  Set root work directory\n" +
+		"`/cd <dir>`  Change directory (relative to root)\n" +
+		"`/pwd`  Show current directory\n" +
+		"`/ls`  List projects in root directory\n\n" +
+		"**Git:**\n" +
+		"`/git <args>`  Run git command\n" +
+		"`/diff`  Show current changes\n" +
+		"`/commit <msg>`  Quick commit\n" +
+		"`/push`  Quick push\n" +
+		"`/undo`  Discard uncommitted changes\n" +
+		"`/stash [pop]`  Stash/restore changes\n\n" +
+		"**Session:**\n" +
+		"`/new`  Start new Claude session\n" +
+		"`/sessions`  List session history\n" +
+		"`/switch <id>`  Switch to session\n\n" +
+		"**Control:**\n" +
+		"`/kill`  Terminate current execution\n" +
+		"`/model <name>`  Switch Claude model\n" +
+		"`/yolo`  Enable unrestricted mode\n" +
+		"`/safe`  Restore safe mode\n" +
+		"`/last`  Show last Claude output\n" +
+		"`/summary`  Summarize last output\n\n" +
+		"**System:**\n" +
+		"`/sh <cmd>`  Run shell command (via Claude)\n" +
+		"`/file <path>`  Send project file to chat\n\n" +
+		"**Docs:**\n" +
+		"`/doc push <path>`  Push Markdown to Feishu doc\n" +
+		"`/doc pull <path>`  Pull shared doc to project\n" +
+		"`/doc bind <path> <url|id>`  Bind file to Feishu doc\n" +
+		"`/doc unbind <path>`  Unbind\n" +
+		"`/doc list`  List bindings\n\n" +
+		"Any other message is sent directly to Claude as a prompt."
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "DevBot Help", Content: md})
 }
 
 func (r *Router) cmdPing(ctx context.Context, chatID string) {
@@ -212,16 +203,7 @@ func (r *Router) cmdStatus(ctx context.Context, chatID string) {
 		lastExecStr = lastExec.String()
 	}
 
-	status := fmt.Sprintf(`Status:
-  WorkDir:  %s
-  Session:  %s
-  Model:    %s
-  Mode:     %s
-  Running:  %v
-  Execs:    %d
-  LastExec: %s
-  Queued:   %d
-  Uptime:   %s`,
+	md := fmt.Sprintf("**WorkDir:**  %s\n**Session:**  %s\n**Model:**    %s\n**Mode:**     %s\n**Running:**  %v\n**Execs:**    %d\n**LastExec:** %s\n**Queued:**   %d\n**Uptime:**   %s",
 		session.WorkDir,
 		session.ClaudeSessionID,
 		session.Model,
@@ -232,7 +214,7 @@ func (r *Router) cmdStatus(ctx context.Context, chatID string) {
 		queuePending,
 		uptime,
 	)
-	r.sender.SendText(ctx, chatID, status)
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Status", Content: md})
 }
 
 func (r *Router) cmdPwd(ctx context.Context, chatID string) {
@@ -347,9 +329,9 @@ func (r *Router) cmdSessions(ctx context.Context, chatID string) {
 		lines = append(lines, fmt.Sprintf("  %d: %s", i, id))
 	}
 	if session.ClaudeSessionID != "" {
-		lines = append(lines, fmt.Sprintf("  * %s (current)", session.ClaudeSessionID))
+		lines = append(lines, fmt.Sprintf("  **\\* %s** (current)", session.ClaudeSessionID))
 	}
-	r.sender.SendText(ctx, chatID, "Sessions:\n"+strings.Join(lines, "\n"))
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Sessions", Content: strings.Join(lines, "\n")})
 }
 
 func (r *Router) cmdSwitch(ctx context.Context, chatID, args string) {
@@ -609,7 +591,8 @@ func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
 	r.store.SetDocBinding(filePath, docID)
 	r.save()
 
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Pushed to Feishu doc.\nID: %s\nURL: %s", docID, docURL))
+	md := fmt.Sprintf("**ID:** %s\n**URL:** [%s](%s)", docID, docURL, docURL)
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Doc Pushed", Content: md})
 }
 
 func (r *Router) cmdDocPull(ctx context.Context, chatID, args string) {
@@ -704,9 +687,9 @@ func (r *Router) cmdDocList(ctx context.Context, chatID string) {
 
 	var lines []string
 	for path, docID := range bindings {
-		lines = append(lines, fmt.Sprintf("  %s -> %s", path, docID))
+		lines = append(lines, fmt.Sprintf("**%s** -> %s", path, docID))
 	}
-	r.sender.SendText(ctx, chatID, "Doc bindings:\n"+strings.Join(lines, "\n"))
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Doc Bindings", Content: strings.Join(lines, "\n")})
 }
 
 func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string) {
@@ -781,7 +764,7 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt str
 }
 
 func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
-	r.sender.SendText(ctx, chatID, "Executing...")
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Executing...", Template: "blue"})
 
 	workDir, sessionID, permMode, model := r.store.SessionExecParams(chatID)
 	if permMode == "" {
@@ -789,7 +772,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	}
 	result, err := r.executor.Exec(ctx, prompt, workDir, sessionID, permMode, model)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Error", Content: fmt.Sprintf("%v", err), Template: "red"})
 		return
 	}
 
@@ -805,5 +788,5 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	if output == "" {
 		output = "(empty response)"
 	}
-	r.sender.SendTextChunked(ctx, chatID, output)
+	r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
 }

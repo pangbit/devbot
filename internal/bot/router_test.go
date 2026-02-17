@@ -25,6 +25,11 @@ func (s *spySender) SendTextChunked(_ context.Context, _, text string) error {
 	return nil
 }
 
+func (s *spySender) SendCard(_ context.Context, _ string, card CardMsg) error {
+	s.messages = append(s.messages, card.Title+"\n\n"+card.Content)
+	return nil
+}
+
 func (s *spySender) LastMessage() string {
 	if len(s.messages) == 0 {
 		return ""
@@ -98,11 +103,11 @@ func TestRouterStatus(t *testing.T) {
 		t.Fatalf("status should show Queued, got: %q", msg)
 	}
 	// With no executions, LastExec should be "-"
-	if !strings.Contains(msg, "LastExec: -") {
+	if !strings.Contains(msg, "LastExec:** -") {
 		t.Fatalf("status should show LastExec: - when no execs, got: %q", msg)
 	}
 	// Execs should be 0
-	if !strings.Contains(msg, "Execs:    0") {
+	if !strings.Contains(msg, "Execs:**    0") {
 		t.Fatalf("status should show Execs: 0, got: %q", msg)
 	}
 }
@@ -353,6 +358,13 @@ func (s *syncSpySender) SendTextChunked(_ context.Context, _, text string) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, text)
+	return nil
+}
+
+func (s *syncSpySender) SendCard(_ context.Context, _ string, card CardMsg) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, card.Title+"\n\n"+card.Content)
 	return nil
 }
 
@@ -623,7 +635,7 @@ func TestRouterExecCommands(t *testing.T) {
 			msgs := sender.Messages()
 			hasExecuting := false
 			for _, m := range msgs {
-				if m == "Executing..." {
+				if strings.Contains(m, "Executing...") {
 					hasExecuting = true
 				}
 			}
@@ -645,7 +657,7 @@ func TestRouterSummary_Dispatches(t *testing.T) {
 	msgs := sender.Messages()
 	hasExecuting := false
 	for _, m := range msgs {
-		if m == "Executing..." {
+		if strings.Contains(m, "Executing...") {
 			hasExecuting = true
 		}
 	}
@@ -661,7 +673,7 @@ func TestRouterHandlePrompt(t *testing.T) {
 	msgs := sender.Messages()
 	hasExecuting := false
 	for _, m := range msgs {
-		if m == "Executing..." {
+		if strings.Contains(m, "Executing...") {
 			hasExecuting = true
 		}
 	}
@@ -681,10 +693,10 @@ func TestRouterExecClaude_NoQueue(t *testing.T) {
 	if len(sender.messages) < 2 {
 		t.Fatalf("expected at least 2 messages, got %d: %v", len(sender.messages), sender.messages)
 	}
-	if sender.messages[0] != "Executing..." {
+	if !strings.Contains(sender.messages[0], "Executing...") {
 		t.Fatalf("expected 'Executing...', got: %q", sender.messages[0])
 	}
-	if !strings.Contains(sender.messages[1], "Error:") {
+	if !strings.Contains(sender.messages[1], "Error") {
 		t.Fatalf("expected error message, got: %q", sender.messages[1])
 	}
 }
@@ -798,5 +810,79 @@ func TestRouterNewSession_ClearsSessionID(t *testing.T) {
 	argsData, _ := os.ReadFile(argsFile)
 	if strings.Contains(string(argsData), "--resume") {
 		t.Fatalf("message after /new should NOT have --resume, got: %q", string(argsData))
+	}
+}
+
+// --- cardSpySender for card-specific assertions ---
+
+type cardSpySender struct {
+	cards []CardMsg
+	texts []string
+}
+
+func (s *cardSpySender) SendText(_ context.Context, _, text string) error {
+	s.texts = append(s.texts, text)
+	return nil
+}
+
+func (s *cardSpySender) SendTextChunked(_ context.Context, _, text string) error {
+	s.texts = append(s.texts, text)
+	return nil
+}
+
+func (s *cardSpySender) SendCard(_ context.Context, _ string, card CardMsg) error {
+	s.cards = append(s.cards, card)
+	return nil
+}
+
+func TestRouterExecClaude_ResponseIsCard(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"**bold** and `code`\",\"session_id\":\"s1\"}'\n"), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	if len(sender.cards) < 2 {
+		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
+	}
+	// First card: Executing...
+	if sender.cards[0].Title != "Executing..." {
+		t.Fatalf("expected Executing... card, got: %q", sender.cards[0].Title)
+	}
+	// Last card: response (no title)
+	last := sender.cards[len(sender.cards)-1]
+	if last.Title != "" {
+		t.Fatalf("expected no title on response card, got: %q", last.Title)
+	}
+	if !strings.Contains(last.Content, "**bold**") {
+		t.Fatalf("expected markdown content, got: %q", last.Content)
+	}
+}
+
+func TestRouterExecClaude_ErrorIsRedCard(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"something failed\",\"is_error\":true,\"session_id\":\"s1\"}'\n"), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	var found bool
+	for _, c := range sender.cards {
+		if c.Title == "Error" && c.Template == "red" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected red Error card, got cards: %+v texts: %v", sender.cards, sender.texts)
 	}
 }
