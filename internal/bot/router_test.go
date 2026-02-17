@@ -673,11 +673,20 @@ func TestRouterExecClaude_NoQueue(t *testing.T) {
 	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
 	// No queue — execClaude called synchronously
 	r.Route(context.Background(), "chat1", "user1", "hello")
-	if len(sender.messages) < 1 {
-		t.Fatalf("expected at least 1 message, got %d: %v", len(sender.messages), sender.messages)
+	if len(sender.messages) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d: %v", len(sender.messages), sender.messages)
 	}
-	if !strings.Contains(sender.messages[0], "Error") {
-		t.Fatalf("expected error message, got: %q", sender.messages[0])
+	if !strings.Contains(sender.messages[0], "Executing...") {
+		t.Fatalf("expected 'Executing...' text, got: %q", sender.messages[0])
+	}
+	hasError := false
+	for _, m := range sender.messages {
+		if strings.Contains(m, "Error") {
+			hasError = true
+		}
+	}
+	if !hasError {
+		t.Fatalf("expected error message, got: %v", sender.messages)
 	}
 }
 
@@ -827,23 +836,32 @@ func TestRouterExecClaude_ResponseIsCard(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "hello")
 
-	if len(sender.cards) < 2 {
-		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
+	// Response card
+	if len(sender.cards) < 1 {
+		t.Fatalf("expected at least 1 card, got %d: %+v", len(sender.cards), sender.cards)
 	}
-	// First card: response (no title)
 	if sender.cards[0].Title != "" {
 		t.Fatalf("expected no title on response card, got: %q", sender.cards[0].Title)
 	}
 	if !strings.Contains(sender.cards[0].Content, "**bold**") {
 		t.Fatalf("expected markdown content, got: %q", sender.cards[0].Content)
 	}
-	// Last card: Done
-	last := sender.cards[len(sender.cards)-1]
-	if !strings.Contains(last.Title, "Done") {
-		t.Fatalf("expected Done card, got: %q", last.Title)
+	// Executing... and Done are plain text
+	hasExecuting := false
+	hasDone := false
+	for _, t2 := range sender.texts {
+		if strings.Contains(t2, "Executing...") {
+			hasExecuting = true
+		}
+		if strings.Contains(t2, "Done") {
+			hasDone = true
+		}
 	}
-	if last.Template != "green" {
-		t.Fatalf("expected green template, got: %q", last.Template)
+	if !hasExecuting {
+		t.Fatalf("expected 'Executing...' text, got texts: %v", sender.texts)
+	}
+	if !hasDone {
+		t.Fatalf("expected 'Done' text, got texts: %v", sender.texts)
 	}
 }
 
@@ -910,18 +928,22 @@ echo '{"type":"result","result":"Final answer","session_id":"s1"}'
 
 	r.Route(context.Background(), "chat1", "user1", "hello")
 
-	// Result card + Done card
-	if len(sender.cards) < 2 {
-		t.Fatalf("expected at least 2 cards, got %d: %+v", len(sender.cards), sender.cards)
+	// Result card with content
+	if len(sender.cards) < 1 {
+		t.Fatalf("expected at least 1 card, got %d: %+v", len(sender.cards), sender.cards)
 	}
-	// First card: result with content
 	if !strings.Contains(sender.cards[0].Content, "Final answer") {
 		t.Fatalf("expected final answer in result card, got: %q", sender.cards[0].Content)
 	}
-	// Last card: Done
-	last := sender.cards[len(sender.cards)-1]
-	if !strings.Contains(last.Title, "Done") {
-		t.Fatalf("expected Done card, got: %q", last.Title)
+	// Done as plain text
+	hasDone := false
+	for _, t2 := range sender.texts {
+		if strings.Contains(t2, "Done") {
+			hasDone = true
+		}
+	}
+	if !hasDone {
+		t.Fatalf("expected 'Done' text, got texts: %v", sender.texts)
 	}
 }
 

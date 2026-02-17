@@ -764,6 +764,8 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt str
 }
 
 func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
+	r.sender.SendText(ctx, chatID, "Executing...")
+
 	workDir, sessionID, permMode, model := r.store.SessionExecParams(chatID)
 	if permMode == "" {
 		permMode = "safe"
@@ -786,7 +788,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		}
 
 		lastSendTime = now
-		display := text
+		display := strings.TrimLeft(text, "\n")
 		if len(display) > 1000 {
 			display = "..." + display[len(display)-1000:]
 		}
@@ -816,6 +818,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 想确认", Content: output, Template: "purple"})
 		return
 	}
+	output = strings.TrimLeft(output, "\n")
 	r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Done (%s)", elapsed), Template: "green"})
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("Done (%s)", elapsed))
 }
