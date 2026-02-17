@@ -787,16 +787,16 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	if permMode == "" {
 		permMode = "safe"
 	}
-	output, err := r.executor.Exec(ctx, prompt, workDir, sessionID, permMode, model)
+	result, err := r.executor.Exec(ctx, prompt, workDir, sessionID, permMode, model)
 	if err != nil {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
 		return
 	}
 
 	r.store.UpdateSession(chatID, func(s *Session) {
-		s.LastOutput = output
+		s.LastOutput = result.Output
 	})
 	r.save()
 
-	r.sender.SendTextChunked(ctx, chatID, output)
+	r.sender.SendTextChunked(ctx, chatID, result.Output)
 }

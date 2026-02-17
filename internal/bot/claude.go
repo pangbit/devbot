@@ -3,11 +3,17 @@ package bot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"sync"
 	"time"
 )
+
+type ExecResult struct {
+	Output    string
+	SessionID string
+}
 
 type ClaudeExecutor struct {
 	claudePath       string
@@ -27,8 +33,8 @@ func NewClaudeExecutor(claudePath, model string, timeout time.Duration) *ClaudeE
 	}
 }
 
-func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, permissionMode, model string) (string, error) {
-	args := []string{"-p", prompt, "--output-format", "text"}
+func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, permissionMode, model string) (ExecResult, error) {
+	args := []string{"-p", prompt, "--output-format", "json"}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}
@@ -50,7 +56,7 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start claude: %w", err)
+		return ExecResult{}, fmt.Errorf("failed to start claude: %w", err)
 	}
 
 	c.mu.Lock()
@@ -69,12 +75,19 @@ func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, p
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("execution timed out after %v", c.timeout)
+			return ExecResult{}, fmt.Errorf("execution timed out after %v", c.timeout)
 		}
-		return "", fmt.Errorf("claude error: %w\nstderr: %s", err, stderr.String())
+		return ExecResult{}, fmt.Errorf("claude error: %w\nstderr: %s", err, stderr.String())
 	}
 
-	return stdout.String(), nil
+	var resp struct {
+		Result    string `json:"result"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		return ExecResult{}, fmt.Errorf("failed to parse claude response: %w\nraw: %s", err, stdout.String())
+	}
+	return ExecResult{Output: resp.Result, SessionID: resp.SessionID}, nil
 }
 
 func (c *ClaudeExecutor) Kill() error {

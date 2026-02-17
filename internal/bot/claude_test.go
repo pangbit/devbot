@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,15 +13,17 @@ import (
 func TestClaudeExecRunsCommand(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
-	os.WriteFile(script, []byte("#!/bin/sh\necho \"Hello from Claude\"\n"), 0755)
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"Hello from Claude","session_id":"s1"}'
+`), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
-	output, err := exec.Exec(context.Background(), "test prompt", dir, "", "safe", "sonnet")
+	result, err := exec.Exec(context.Background(), "test prompt", dir, "", "safe", "sonnet")
 	if err != nil {
 		t.Fatalf("Exec error: %v", err)
 	}
-	if output != "Hello from Claude\n" {
-		t.Fatalf("unexpected output: %q", output)
+	if result.Output != "Hello from Claude" {
+		t.Fatalf("unexpected output: %q", result.Output)
 	}
 }
 
@@ -38,16 +41,19 @@ func TestClaudeExecTimeout(t *testing.T) {
 
 func TestClaudeExecWithSessionID(t *testing.T) {
 	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
 	script := filepath.Join(dir, "claude")
-	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\"\n"), 0755)
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\necho '{\"type\":\"result\",\"result\":\"ok\",\"session_id\":\"s1\"}'\n", argsFile)), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
-	output, err := exec.Exec(context.Background(), "hello", dir, "ses123", "safe", "sonnet")
+	_, err := exec.Exec(context.Background(), "hello", dir, "ses123", "safe", "sonnet")
 	if err != nil {
 		t.Fatalf("Exec error: %v", err)
 	}
-	if !strings.Contains(output, "--resume") || !strings.Contains(output, "ses123") {
-		t.Fatalf("expected --resume ses123 in args, got: %q", output)
+	argsData, _ := os.ReadFile(argsFile)
+	args := string(argsData)
+	if !strings.Contains(args, "--resume") || !strings.Contains(args, "ses123") {
+		t.Fatalf("expected --resume ses123 in args, got: %q", args)
 	}
 }
 
@@ -76,7 +82,9 @@ func TestClaudeExecModelGetSet(t *testing.T) {
 func TestClaudeExecCountAndDuration(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
-	os.WriteFile(script, []byte("#!/bin/sh\necho ok\n"), 0755)
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"ok","session_id":"s1"}'
+`), 0755)
 
 	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
 
@@ -136,6 +144,27 @@ func TestClaudeExecWaitIdleTimeout(t *testing.T) {
 
 	// Cleanup
 	exec.Kill()
+}
+
+func TestClaudeExecReturnsExecResult(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// Fake CLI that returns JSON with session_id
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"Hello from Claude","session_id":"sess-abc-123"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.Exec(context.Background(), "test prompt", dir, "", "safe", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	if result.Output != "Hello from Claude" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if result.SessionID != "sess-abc-123" {
+		t.Fatalf("unexpected session ID: %q", result.SessionID)
+	}
 }
 
 func TestClaudeExecCountIncrementsOnError(t *testing.T) {
