@@ -313,6 +313,8 @@ func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessio
 			if text != "" && onProgress != nil {
 				onProgress(text)
 			}
+		case "system":
+			log.Printf("claude stream: system event: %s", string(line))
 		case "result":
 			result.Output = ev.Result
 			result.SessionID = ev.SessionID
@@ -328,6 +330,7 @@ func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessio
 				c.execCount++
 				c.lastExecDuration = duration
 				c.mu.Unlock()
+				log.Printf("claude stream: error result raw: %s", string(line))
 				errMsg := ev.Result
 				if errMsg == "" {
 					errMsg = "unknown error"
