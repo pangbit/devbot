@@ -1,0 +1,11 @@
+# Build output
+dist/
+
+# macOS
+.DS_Store
+
+# Downloaded images cache
+.devbot-images/
+
+# Sensitive config (never commit real config)
+config.yaml
