@@ -1049,6 +1049,81 @@ echo '{"type":"result","result":"Final answer","session_id":"s1"}'
 	}
 }
 
+func TestRouterExecClaude_EmptyResponse(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"\",\"session_id\":\"s1\"}'\n"), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	var found bool
+	for _, c := range sender.cards {
+		if strings.Contains(c.Content, "(empty response)") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected '(empty response)' card, got cards: %+v texts: %v", sender.cards, sender.texts)
+	}
+}
+
+func TestRouterExecClaude_AutoRecoversSessionNotFound(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "claude")
+	// When called with --resume, return session-not-found error.
+	// When called without --resume, succeed.
+	os.WriteFile(script, []byte(fmt.Sprintf(`#!/bin/sh
+if echo "$@" | grep -q -- "--resume"; then
+  echo '{"type":"result","result":"No conversation found with session ID old-sess","is_error":true,"session_id":"old-sess"}'
+else
+  echo "$@" > %s
+  echo '{"type":"result","result":"recovered","session_id":"new-sess"}'
+fi
+`, argsFile)), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Pre-populate session with an old session ID
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.ClaudeSessionID = "old-sess"
+	})
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	// Recovery call should not use --resume
+	argsData, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(argsData), "--resume") {
+		t.Fatalf("recovery call should not have --resume, got: %q", string(argsData))
+	}
+
+	// Should show the recovered result
+	var found bool
+	for _, c := range sender.cards {
+		if strings.Contains(c.Content, "recovered") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'recovered' in result, got cards: %+v texts: %v", sender.cards, sender.texts)
+	}
+
+	// Session ID should be updated to new-sess
+	sess := store.GetSession("chat1", "", "")
+	if sess.ClaudeSessionID != "new-sess" {
+		t.Fatalf("expected new-sess after recovery, got: %q", sess.ClaudeSessionID)
+	}
+}
+
 func TestRouterExecClaude_StreamSavesSessionAndOutput(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
