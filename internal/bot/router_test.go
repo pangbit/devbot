@@ -2115,6 +2115,101 @@ func TestRouterStatus_WhenRunning(t *testing.T) {
 	<-done
 }
 
+// TestRouterInfo_WhenRunning verifies that /info shows "执行中" when executor is busy.
+func TestRouterInfo_WhenRunning(t *testing.T) {
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ntouch %s\nexec sleep 30\n", readyPath)), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	snd := &spySender{}
+	ex := NewClaudeExecutor(script, "sonnet", 60*time.Second)
+	r := NewRouter(context.Background(), ex, store, snd, map[string]bool{"user1": true}, dir, nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Route(context.Background(), "chat1", "user1", "run long task")
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(readyPath); err != nil {
+		t.Fatal("script did not start within 5s")
+	}
+
+	r.Route(context.Background(), "chat1", "user1", "/info")
+	found := false
+	for _, m := range snd.messages {
+		if strings.Contains(m, "执行中") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected '执行中' in /info while running, got: %v", snd.messages)
+	}
+
+	ex.Kill()
+	<-done
+}
+
+// TestExecClaude_SessionAutoRecover verifies that if claude reports "No conversation found with session ID",
+// execClaude clears the session and retries without --resume.
+func TestExecClaude_SessionAutoRecover(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// First call (with --resume): return error; second call (without): succeed.
+	sentinelPath := filepath.Join(dir, "first_done")
+	scriptContent := fmt.Sprintf(`#!/bin/sh
+if echo "$@" | grep -q -- "--resume"; then
+    printf '{"type":"result","is_error":true,"result":"No conversation found with session ID abc","session_id":""}\n'
+    touch %s
+    exit 0
+fi
+printf '{"type":"result","is_error":false,"result":"recovered ok","session_id":"new-sess"}\n'
+`, sentinelPath)
+	os.WriteFile(script, []byte(scriptContent), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	// Pre-set a session with a fake session ID so execClaude will pass --resume on first call.
+	store.GetSession("chat1", dir, "sonnet")
+	store.UpdateSession("chat1", func(s *Session) {
+		s.ClaudeSessionID = "old-session-id"
+	})
+
+	snd := &spySender{}
+	ex := NewClaudeExecutor(script, "sonnet", 15*time.Second)
+	r := NewRouter(context.Background(), ex, store, snd, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello after session loss")
+
+	// Verify sentinel was touched (first call did happen with --resume)
+	if _, err := os.Stat(sentinelPath); err != nil {
+		t.Fatal("expected first claude call with --resume, sentinel not found")
+	}
+	// After recovery, the session ID should be cleared and updated to new one
+	sess := store.GetSession("chat1", dir, "sonnet")
+	if sess.ClaudeSessionID != "new-sess" {
+		t.Fatalf("expected session to be updated to new-sess, got: %q", sess.ClaudeSessionID)
+	}
+	// Verify success message was sent
+	found := false
+	for _, m := range snd.messages {
+		if strings.Contains(m, "完成") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected '完成' in messages after recovery, got: %v", snd.messages)
+	}
+}
+
 // --- minInt unit test ---
 
 func TestMinInt(t *testing.T) {
