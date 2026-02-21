@@ -158,6 +158,39 @@ func TestRouterLs(t *testing.T) {
 	}
 }
 
+func TestRouterLs_ShowsDirtyIndicator(t *testing.T) {
+	// /ls should show [branch ●] for projects with uncommitted changes
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, "myproject")
+	os.MkdirAll(projectDir, 0755)
+
+	// Init a git repo with a tracked file, then modify it
+	exec.Command("git", "-C", projectDir, "init").Run()
+	exec.Command("git", "-C", projectDir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", projectDir, "config", "user.name", "T").Run()
+	os.WriteFile(filepath.Join(projectDir, "file.go"), []byte("original"), 0644)
+	exec.Command("git", "-C", projectDir, "add", ".").Run()
+	exec.Command("git", "-C", projectDir, "commit", "-m", "init").Run()
+	// Modify to create dirty state
+	os.WriteFile(filepath.Join(projectDir, "file.go"), []byte("modified"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/ls")
+
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "myproject") {
+		t.Fatalf("expected 'myproject' in ls output, got: %q", msg)
+	}
+	// Should show dirty indicator
+	if !strings.Contains(msg, "●") {
+		t.Fatalf("expected dirty indicator ● in ls output, got: %q", msg)
+	}
+}
+
 func TestRouterCd(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/cd project1")
