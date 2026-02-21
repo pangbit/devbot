@@ -3104,7 +3104,8 @@ func TestRouterDiff_DefaultWorkDir(t *testing.T) {
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
-	// Force empty WorkDir
+	// Create session first (via getSession), then clear WorkDir
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	r.Route(context.Background(), "chat1", "user1", "/diff")
@@ -3122,9 +3123,8 @@ func TestRouterRecent_DefaultWorkDir(t *testing.T) {
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
-	// Trigger a command first to create the session in the store
-	r.Route(context.Background(), "chat1", "user1", "/ping")
-	// Now set WorkDir to empty to force fallback
+	// Create session first (via getSession), then clear WorkDir to force fallback
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	r.Route(context.Background(), "chat1", "user1", "/recent")
@@ -3954,8 +3954,8 @@ func TestRouterClean_DefaultWorkDir(t *testing.T) {
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
-	// Route once to create session, then clear WorkDir to force fallback to WorkRoot
-	r.Route(context.Background(), "chat1", "user1", "/ping")
+	// Use /status (which calls getSession) to create the session, then clear WorkDir
+	r.Route(context.Background(), "chat1", "user1", "/status")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	sender.cards = nil // reset
@@ -4027,8 +4027,8 @@ func TestRouterGit_DefaultWorkDir(t *testing.T) {
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
-	// Route once to create session, then clear WorkDir
-	r.Route(context.Background(), "chat1", "user1", "/ping")
+	// Create session first (via getSession), then clear WorkDir
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 	sender.cards = nil
 
@@ -4249,8 +4249,8 @@ func TestRouterUndo_DefaultWorkDir(t *testing.T) {
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
-	// Route first to create session
-	r.Route(context.Background(), "chat1", "user1", "/ping")
+	// Create session first (via getSession), then clear WorkDir
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	r.Route(context.Background(), "chat1", "user1", "/undo")
