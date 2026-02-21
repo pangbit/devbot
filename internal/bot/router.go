@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"devbot/internal/version"
 )
 
 type Router struct {
@@ -81,6 +83,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdHelp(ctx, chatID)
 	case "/ping":
 		r.cmdPing(ctx, chatID)
+	case "/version":
+		r.cmdVersion(ctx, chatID)
 	case "/status":
 		r.cmdStatus(ctx, chatID)
 	case "/pwd":
@@ -197,6 +201,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/doc list`  查看所有绑定关系\n\n" +
 		"**💬 其他:**\n" +
 		"`/ping`  检查机器人是否在线\n" +
+		"`/version`  显示版本信息（版本号、Commit、构建时间）\n" +
 		"`/help`  显示此帮助\n\n" +
 		"直接发送文字即可与 Claude 对话，也可发送图片或文件。"
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: "DevBot 使用指南", Content: md})
@@ -205,6 +210,10 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 func (r *Router) cmdPing(ctx context.Context, chatID string) {
 	uptime := time.Since(r.startTime).Truncate(time.Second)
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("pong ✓ (已运行 %s)", uptime))
+}
+
+func (r *Router) cmdVersion(ctx context.Context, chatID string) {
+	r.sender.SendText(ctx, chatID, version.String())
 }
 
 func (r *Router) cmdStatus(ctx context.Context, chatID string) {
