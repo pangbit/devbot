@@ -677,6 +677,12 @@ func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
 	if content == "" {
 		content = "（无输出）"
 	}
+	// On success, append the one-line summary of the new commit
+	if err == nil {
+		if commitInfo, e := runGitOutput(workDir, "log", "-1", "--pretty=format:commit %h — %s"); e == nil && commitInfo != "" {
+			content += "\n\n" + commitInfo
+		}
+	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + content + "\n```", Template: tpl})
 }
 
@@ -1070,11 +1076,14 @@ func (r *Router) cmdGrep(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到包含 '%s' 的匹配项。", args))
 		return
 	}
+	matchLines := strings.Split(strings.TrimSpace(output), "\n")
+	matchCount := len(matchLines)
+
 	const maxOut = 4000
 	if runes := []rune(output); len(runes) > maxOut {
 		output = fmt.Sprintf("（结果过多，仅显示前 %d 字符）\n\n", maxOut) + string(runes[:maxOut])
 	}
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("搜索: %s", args), Content: "```\n" + output + "\n```"})
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("搜索: %s（%d 处）", args, matchCount), Content: "```\n" + output + "\n```"})
 }
 
 func (r *Router) cmdPR(ctx context.Context, chatID, args string) {
