@@ -16,11 +16,14 @@ func (f *fakeWS) Start(_ context.Context) error {
 }
 
 // blockingWS simulates the real Lark SDK behavior: Start blocks forever with select{}.
-type blockingWS struct{ started bool }
+// startedCh is closed when Start is called, allowing the test to synchronize safely.
+type blockingWS struct {
+	startedCh chan struct{}
+}
 
 func (b *blockingWS) Start(_ context.Context) error {
-	b.started = true
-	select {} // mimics the real SDK
+	close(b.startedCh) // signal that Start was called
+	select {}          // mimics the real SDK
 }
 
 func TestRunStartsWS(t *testing.T) {
@@ -55,7 +58,7 @@ func TestRunReturnsOnContextCancel(t *testing.T) {
 	router := &fakeRouter{}
 	h := NewHandler(router, nil, nil, true, "bot_id", nil)
 
-	ws := &blockingWS{}
+	ws := &blockingWS{startedCh: make(chan struct{})}
 	factory := func(appID, appSecret string, handler *dispatcher.EventDispatcher) WSClient {
 		return ws
 	}
@@ -66,10 +69,11 @@ func TestRunReturnsOnContextCancel(t *testing.T) {
 		done <- Run(ctx, cfg, h, factory)
 	}()
 
-	// Give Run a moment to start
-	time.Sleep(50 * time.Millisecond)
-	if !ws.started {
-		t.Fatal("expected ws to start")
+	// Wait for ws.Start to be called (race-free via channel)
+	select {
+	case <-ws.startedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected ws to start within 2s")
 	}
 
 	cancel()
