@@ -147,6 +147,10 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdCompact(ctx, chatID)
 	case "/find":
 		r.cmdFind(ctx, chatID, args)
+	case "/test":
+		r.cmdTest(ctx, chatID, args)
+	case "/recent":
+		r.cmdRecent(ctx, chatID, args)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/file":
@@ -201,6 +205,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"**📁 文件与搜索:**\n" +
 		"`/grep <pattern>`  在代码中搜索关键词（内容搜索）\n" +
 		"`/find <name>`  按文件名查找文件（支持通配符，如 *.go）\n" +
+		"`/test [pattern]`  运行项目测试（自动识别 Go/Node/Python/Rust）\n" +
+		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/sh <cmd>`  通过 Claude 执行 Shell 命令\n\n" +
 		"**📄 飞书文档同步:**\n" +
@@ -666,6 +672,27 @@ func (r *Router) cmdFind(ctx context.Context, chatID, args string) {
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+func (r *Router) cmdTest(ctx context.Context, chatID, args string) {
+	r.getSession(chatID) // ensure session exists
+	var prompt string
+	if args == "" {
+		prompt = "Detect the project type and run its tests: `go test ./... 2>&1` for Go, `npm test 2>&1` for Node, `pytest 2>&1` for Python, `cargo test 2>&1` for Rust. Show test results focused on failures. Only show the command output, no explanation."
+	} else {
+		prompt = fmt.Sprintf("Run tests matching %q: try `go test ./... -run %q 2>&1`, or `npm test -- --grep %q 2>&1`, or `pytest -k %q 2>&1`. Show results focused on failures. Only show the command output.", args, args, args, args)
+	}
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdRecent(ctx context.Context, chatID, args string) {
+	r.getSession(chatID) // ensure session exists
+	n := "10"
+	if args != "" {
+		n = args
+	}
+	prompt := fmt.Sprintf("List the %s most recently modified files by running `git log --pretty='' --name-only -n %s 2>/dev/null | grep -v '^$' | awk '!seen[$0]++' | head -%s`. If not a git repo, try `find . -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -newer . | head -%s`. Only show file paths, no explanation.", n, n, n, n)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -732,6 +759,15 @@ func gitStatusSummary(workDir string) string {
 	return fmt.Sprintf("%d 个文件变更", len(lines))
 }
 
+// truncateForDisplay trims text to at most maxRunes runes, adding a header note if truncated.
+func truncateForDisplay(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return "（内容过长，仅显示最新部分）\n\n" + string(runes[len(runes)-maxRunes:])
+}
+
 // knownCommands is the authoritative list of all supported slash commands.
 var knownCommands = []string{
 	"/help", "/ping", "/version", "/status", "/info",
@@ -740,7 +776,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
 	"/undo", "/stash",
-	"/grep", "/find", "/sh", "/file", "/compact",
+	"/grep", "/find", "/test", "/recent", "/sh", "/file", "/compact",
 	"/doc",
 }
 
@@ -1186,11 +1222,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 		}
 
 		lastSendTime = now
-		display := strings.TrimSpace(text)
-		runes := []rune(display)
-		if len(runes) > 4000 {
-			display = "（内容过长，仅显示最新部分）\n\n" + string(runes[len(runes)-4000:])
-		}
+		display := truncateForDisplay(strings.TrimSpace(text), 4000)
 		lastProgressContent = display
 		r.sender.SendCard(ctx, chatID, CardMsg{Content: display})
 	}

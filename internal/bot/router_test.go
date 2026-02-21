@@ -2115,6 +2115,95 @@ func TestRouterStatus_WhenRunning(t *testing.T) {
 	<-done
 }
 
+// TestTruncateForDisplay verifies the truncation helper.
+func TestTruncateForDisplay(t *testing.T) {
+	// Short text - no truncation
+	short := strings.Repeat("a", 100)
+	if truncateForDisplay(short, 200) != short {
+		t.Fatal("expected short text unchanged")
+	}
+	// Long text - should truncate and add header
+	long := strings.Repeat("b", 5000)
+	result := truncateForDisplay(long, 4000)
+	if !strings.Contains(result, "内容过长") {
+		t.Fatalf("expected truncation header, got: %q", result[:50])
+	}
+	runes := []rune(result)
+	if len(runes) > 4100 { // header + 4000 runes
+		t.Fatalf("expected result within ~4100 runes, got %d", len(runes))
+	}
+	// Unicode - should handle multibyte chars correctly
+	emoji := strings.Repeat("🎉", 5000)
+	r2 := truncateForDisplay(emoji, 4000)
+	if !strings.Contains(r2, "内容过长") {
+		t.Fatalf("expected truncation for emoji string")
+	}
+}
+
+// TestRouterTest_NoArgs verifies that /test triggers Claude execution.
+func TestRouterTest_NoArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/test")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /test to trigger execution, got: %v", msgs)
+	}
+}
+
+// TestRouterTest_WithPattern verifies that /test with a pattern passes it to Claude.
+func TestRouterTest_WithPattern(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/test TestMyFeature")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /test with pattern to trigger execution, got: %v", msgs)
+	}
+}
+
+// TestRouterRecent_NoArgs verifies that /recent without args triggers execution.
+func TestRouterRecent_NoArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/recent")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /recent to trigger execution, got: %v", msgs)
+	}
+}
+
+// TestRouterRecent_WithCount verifies that /recent with count passes it.
+func TestRouterRecent_WithCount(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/recent 5")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /recent 5 to trigger execution, got: %v", msgs)
+	}
+}
+
 // TestRouterFind_EmptyArgs verifies that /find without args shows usage.
 func TestRouterFind_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
