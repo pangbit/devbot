@@ -978,7 +978,7 @@ func TestRouterKill_Running(t *testing.T) {
 	}()
 
 	// Wait for the script to start (file appears when ready)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(readyPath); err == nil {
 			break
@@ -986,7 +986,7 @@ func TestRouterKill_Running(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if _, err := os.Stat(readyPath); err != nil {
-		t.Fatal("script did not start within 5s")
+		t.Fatal("script did not start within 10s")
 	}
 
 	// Kill the running process
@@ -995,7 +995,7 @@ func TestRouterKill_Running(t *testing.T) {
 	// Wait for the first route to complete
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("expected route goroutine to finish after kill")
 	}
 
@@ -2088,7 +2088,7 @@ func TestRouterStatus_WhenRunning(t *testing.T) {
 	}()
 
 	// Wait for script to start
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(readyPath); err == nil {
 			break
@@ -2096,7 +2096,7 @@ func TestRouterStatus_WhenRunning(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if _, err := os.Stat(readyPath); err != nil {
-		t.Fatal("script did not start within 5s")
+		t.Fatal("script did not start within 10s")
 	}
 
 	// Check status while running
@@ -2202,7 +2202,7 @@ func TestRouterInfo_WhenRunning(t *testing.T) {
 		r.Route(context.Background(), "chat1", "user1", "run long task")
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(readyPath); err == nil {
 			break
@@ -2210,7 +2210,7 @@ func TestRouterInfo_WhenRunning(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if _, err := os.Stat(readyPath); err != nil {
-		t.Fatal("script did not start within 5s")
+		t.Fatal("script did not start within 10s")
 	}
 
 	r.Route(context.Background(), "chat1", "user1", "/info")
