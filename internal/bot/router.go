@@ -119,6 +119,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdDiff(ctx, chatID)
 	case "/commit":
 		r.cmdCommit(ctx, chatID, args)
+	case "/pull":
+		r.cmdPull(ctx, chatID, args)
 	case "/push":
 		r.cmdPush(ctx, chatID, args)
 	case "/undo":
@@ -199,7 +201,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/log [n]`  查看提交历史（默认最近 20 条）\n" +
 		"`/branch [name]`  查看分支列表或切换/创建分支\n" +
 		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
-		"`/push`  推送到远程\n" +
+		"`/pull [args]`  从远程拉取（即时响应）\n" +
+		"`/push [args]`  推送到远程（即时响应）\n" +
 		"`/pr [title]`  创建 Pull Request\n" +
 		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
@@ -618,6 +621,30 @@ func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 	r.getSession(chatID) // ensure session exists
 	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
 	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdPull(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	gitArgs := []string{"pull"}
+	if args != "" {
+		gitArgs = append(gitArgs, strings.Fields(args)...)
+	}
+	output, err := runGitOutput(workDir, gitArgs...)
+	tpl := "green"
+	title := "git pull 成功"
+	if err != nil {
+		tpl = "red"
+		title = "git pull 出错"
+	}
+	content := output
+	if content == "" {
+		content = "（无输出）"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + content + "\n```", Template: tpl})
 }
 
 func (r *Router) cmdPush(ctx context.Context, chatID, args string) {
@@ -1189,7 +1216,7 @@ var knownCommands = []string{
 	"/pwd", "/ls", "/root", "/cd",
 	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
 	"/last", "/summary", "/model", "/yolo", "/safe",
-	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
+	"/git", "/diff", "/log", "/branch", "/commit", "/pull", "/push", "/pr",
 	"/undo", "/stash",
 	"/grep", "/find", "/test", "/todo", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",

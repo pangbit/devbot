@@ -2802,8 +2802,8 @@ func TestRouterDiff_LargeOutput(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "add large file").Run()
 
-	// Now modify it to create a large diff
-	modifiedContent := strings.Repeat("modified line content here!\n", 50) + strings.Repeat("extra line\n", 200)
+	// Now modify it to create a large diff (>4000 chars)
+	modifiedContent := strings.Repeat("modified line content here!\n", 200)
 	os.WriteFile(filepath.Join(dir, "large.go"), []byte(modifiedContent), 0644)
 
 	store, _ := NewStore(filepath.Join(dir, "state.json"))
@@ -2813,9 +2813,48 @@ func TestRouterDiff_LargeOutput(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/diff")
 
-	// Should get a card (possibly truncated)
 	if len(sender.cards) == 0 {
 		t.Fatalf("expected a card from /diff with large output")
+	}
+	if !strings.Contains(sender.cards[0].Content, "末尾部分") {
+		t.Fatalf("expected truncation notice in large diff, got: %q", sender.cards[0].Content[:min(100, len(sender.cards[0].Content))])
+	}
+}
+
+func TestRouterDiff_DefaultWorkDir(t *testing.T) {
+	// /diff with empty session WorkDir falls back to workRoot
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Force empty WorkDir
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/diff")
+
+	if sender.LastMessage() == "" {
+		t.Fatal("expected some message from /diff with empty workDir")
+	}
+}
+
+func TestRouterRecent_EmptyCommits(t *testing.T) {
+	// If all commits are empty (no file changes), files list should be empty
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "empty commit 1").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "empty commit 2").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/recent")
+
+	if sender.LastMessage() == "" {
+		t.Fatal("expected some message from /recent with empty commits")
 	}
 }
 
@@ -2956,6 +2995,60 @@ func TestRouterExec_LargeOutputTruncated(t *testing.T) {
 	}
 	if !strings.Contains(sender.cards[0].Content, "输出过长") {
 		t.Fatalf("expected truncation notice for large output, got: %q", sender.cards[0].Content)
+	}
+}
+
+// --- /pull tests ---
+
+func TestRouterPull_NoRemote(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/pull")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /pull with no remote")
+	}
+	if !strings.Contains(sender.cards[0].Title, "出错") {
+		t.Fatalf("expected error card, got: %q", sender.cards[0].Title)
+	}
+}
+
+func TestRouterPull_Success(t *testing.T) {
+	// Create remote and local, push a commit, then pull from local2
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	os.MkdirAll(remoteDir, 0755)
+	exec.Command("git", "-C", remoteDir, "init", "--bare").Run()
+
+	local1 := filepath.Join(dir, "local1")
+	exec.Command("git", "clone", remoteDir, local1).Run()
+	exec.Command("git", "-C", local1, "commit", "--allow-empty", "-m", "init").Run()
+	exec.Command("git", "-C", local1, "push", "origin", "HEAD:refs/heads/main").Run()
+
+	local2 := filepath.Join(dir, "local2")
+	exec.Command("git", "clone", remoteDir, local2).Run()
+
+	// Push a new commit from local1
+	exec.Command("git", "-C", local1, "commit", "--allow-empty", "-m", "second").Run()
+	exec.Command("git", "-C", local1, "push").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = local2 })
+
+	r.Route(context.Background(), "chat1", "user1", "/pull")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /pull")
 	}
 }
 
