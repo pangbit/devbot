@@ -194,10 +194,10 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/log [n]` — 查看提交历史（默认最近 20 条，即时响应）
 - `/branch [name]` — 查看分支列表，或创建/切换分支
 - `/commit [msg]` — 提交变更（不填消息则 Claude 自动生成）
-- `/push` — 推送到远程
+- `/push [args]` — 推送到远程（即时响应，支持 `--force` 等参数）
 - `/pr [title]` — 创建 Pull Request（使用 gh CLI）
-- `/undo` — 撤销所有未提交的更改
-- `/stash [pop]` — 暂存/恢复更改
+- `/undo` — 撤销所有未提交的更改（即时响应，含已暂存的更改）
+- `/stash [pop]` — 暂存/恢复更改（即时响应）
 
 **会话：**
 - `/new` — 开始新的 Claude 会话（旧会话保存到历史）

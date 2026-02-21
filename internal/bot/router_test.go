@@ -1977,10 +1977,14 @@ func TestRouterUndo_NoChanges(t *testing.T) {
 
 func TestRouterUndo_WithChanges(t *testing.T) {
 	dir := t.TempDir()
-	// Initialize a git repo with a dirty file
+	// Initialize a git repo with a tracked file, then modify it
 	exec.Command("git", "-C", dir, "init").Run()
 	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
-	os.WriteFile(filepath.Join(dir, "dirty.go"), []byte("change"), 0644)
+	os.WriteFile(filepath.Join(dir, "dirty.go"), []byte("original"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add file").Run()
+	// Now make it dirty
+	os.WriteFile(filepath.Join(dir, "dirty.go"), []byte("modified"), 0644)
 
 	store, _ := NewStore(filepath.Join(dir, "state.json"))
 	sender := &spySender{}
@@ -1988,16 +1992,10 @@ func TestRouterUndo_WithChanges(t *testing.T) {
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
 	r.Route(context.Background(), "chat1", "user1", "/undo")
-	msgs := sender.messages
-	// Should trigger execution (not the "no changes" message)
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected /undo to trigger execution when changes exist, got: %v", msgs)
+	msg := sender.LastMessage()
+	// Should show success message (direct execution, no Claude)
+	if !strings.Contains(msg, "已撤销") {
+		t.Fatalf("expected '已撤销' message for /undo with changes, got: %q", msg)
 	}
 }
 
@@ -2777,6 +2775,50 @@ func TestRouterLog_NoGitRepo(t *testing.T) {
 	}
 }
 
+func TestRouterLog_ErrorWithOutput(t *testing.T) {
+	// When git log fails AND has output (error message), show git error text
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/log")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatalf("expected some error message from /log in non-git dir")
+	}
+}
+
+func TestRouterDiff_LargeOutput(t *testing.T) {
+	// Create a git repo with a very large diff (>4000 chars) to test truncation
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+
+	// Write a large file and commit it
+	largeContent := strings.Repeat("original line content here\n", 50)
+	os.WriteFile(filepath.Join(dir, "large.go"), []byte(largeContent), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add large file").Run()
+
+	// Now modify it to create a large diff
+	modifiedContent := strings.Repeat("modified line content here!\n", 50) + strings.Repeat("extra line\n", 200)
+	os.WriteFile(filepath.Join(dir, "large.go"), []byte(modifiedContent), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/diff")
+
+	// Should get a card (possibly truncated)
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card from /diff with large output")
+	}
+}
+
 // --- /exec command tests ---
 
 func TestRouterExec_NoArgs(t *testing.T) {
@@ -2917,7 +2959,176 @@ func TestRouterExec_LargeOutputTruncated(t *testing.T) {
 	}
 }
 
-// --- minInt unit test ---
+// --- /push tests ---
+
+func TestRouterPush_NoRemote(t *testing.T) {
+	// /push in a repo with no remote should show error card
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Init a git repo with no remote
+	gitDir := filepath.Join(dir, "myrepo")
+	os.MkdirAll(gitDir, 0755)
+	exec.Command("git", "-C", gitDir, "init").Run()
+	exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", "init").Run()
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = gitDir })
+
+	r.Route(context.Background(), "chat1", "user1", "/push")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected error card for /push with no remote")
+	}
+	if !strings.Contains(sender.cards[0].Title, "出错") {
+		t.Fatalf("expected error card title, got: %q", sender.cards[0].Title)
+	}
+}
+
+func TestRouterPush_DefaultWorkDir(t *testing.T) {
+	// /push with empty session WorkDir should fall back to work root
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Explicitly set WorkDir to empty so it falls back to work root
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/push")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card response when work dir is empty")
+	}
+}
+
+func TestRouterPush_WithArgs(t *testing.T) {
+	// /push --force-with-lease should pass args to git push
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	gitDir := filepath.Join(dir, "myrepo")
+	os.MkdirAll(gitDir, 0755)
+	exec.Command("git", "-C", gitDir, "init").Run()
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = gitDir })
+
+	r.Route(context.Background(), "chat1", "user1", "/push --dry-run")
+
+	// Should get some response (error since no remote, but not a panic)
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response for /push --dry-run")
+	}
+}
+
+// --- /stash tests ---
+
+func TestRouterStash_NoChanges(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	gitDir := filepath.Join(dir, "myrepo")
+	os.MkdirAll(gitDir, 0755)
+	exec.Command("git", "-C", gitDir, "init").Run()
+	exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", "init").Run()
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = gitDir })
+
+	r.Route(context.Background(), "chat1", "user1", "/stash")
+
+	// Should get a card response
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response for /stash")
+	}
+}
+
+func TestRouterStash_Pop(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	gitDir := filepath.Join(dir, "myrepo")
+	os.MkdirAll(gitDir, 0755)
+	exec.Command("git", "-C", gitDir, "init").Run()
+	exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", "init").Run()
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = gitDir })
+
+	// /stash pop with nothing stashed should return an error card
+	r.Route(context.Background(), "chat1", "user1", "/stash pop")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response for /stash pop")
+	}
+	// Title should contain "pop"
+	if len(sender.cards) > 0 && !strings.Contains(sender.cards[0].Title, "pop") {
+		t.Fatalf("expected 'pop' in card title, got: %q", sender.cards[0].Title)
+	}
+}
+
+func TestRouterStash_WithChanges(t *testing.T) {
+	// Stash actual changes, then pop them
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+	os.WriteFile(filepath.Join(dir, "work.go"), []byte("original"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add file").Run()
+	// Modify file to create stashable changes
+	os.WriteFile(filepath.Join(dir, "work.go"), []byte("modified"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/stash")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /stash with changes")
+	}
+	if strings.Contains(sender.cards[0].Title, "出错") {
+		t.Fatalf("expected success, got error: %q", sender.cards[0].Title)
+	}
+}
+
+func TestRouterPush_SuccessWithOutput(t *testing.T) {
+	// Push in a bare repo clone to simulate success with output
+	dir := t.TempDir()
+
+	// Create a bare remote
+	remoteDir := filepath.Join(dir, "remote.git")
+	os.MkdirAll(remoteDir, 0755)
+	exec.Command("git", "-C", remoteDir, "init", "--bare").Run()
+
+	// Clone from the bare remote
+	localDir := filepath.Join(dir, "local")
+	exec.Command("git", "clone", remoteDir, localDir).Run()
+	exec.Command("git", "-C", localDir, "commit", "--allow-empty", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = localDir })
+
+	r.Route(context.Background(), "chat1", "user1", "/push")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response for /push")
+	}
+}
+
+// --- /minInt unit test ---
 
 func TestMinInt(t *testing.T) {
 	if minInt(1, 2, 3) != 1 {

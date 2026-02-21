@@ -120,15 +120,11 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/commit":
 		r.cmdCommit(ctx, chatID, args)
 	case "/push":
-		r.cmdGit(ctx, chatID, "push")
+		r.cmdPush(ctx, chatID, args)
 	case "/undo":
 		r.cmdUndo(ctx, chatID)
 	case "/stash":
-		if args == "" {
-			r.cmdGit(ctx, chatID, "stash")
-		} else {
-			r.cmdGit(ctx, chatID, "stash "+args)
-		}
+		r.cmdStash(ctx, chatID, args)
 	case "/log":
 		r.cmdLog(ctx, chatID, args)
 	case "/branch":
@@ -621,15 +617,76 @@ func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+func (r *Router) cmdPush(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	gitArgs := []string{"push"}
+	if args != "" {
+		gitArgs = append(gitArgs, strings.Fields(args)...)
+	}
+	output, err := runGitOutput(workDir, gitArgs...)
+	tpl := "green"
+	title := "git push 成功"
+	if err != nil {
+		tpl = "red"
+		title = "git push 出错"
+	}
+	content := output
+	if content == "" {
+		content = "（无输出）"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + content + "\n```", Template: tpl})
+}
+
 func (r *Router) cmdUndo(ctx context.Context, chatID string) {
-	r.getSession(chatID) // ensure session exists
-	changes := gitStatusSummary(r.store.GetSession(chatID, r.store.WorkRoot(), r.executor.Model()).WorkDir)
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	changes := gitStatusSummary(workDir)
 	if changes == "无变更" || changes == "" {
 		r.sender.SendText(ctx, chatID, "当前没有未提交的更改，无需撤销。")
 		return
 	}
-	prompt := fmt.Sprintf("⚠️ 即将撤销所有未提交的更改（%s）。运行 `git checkout .` 撤销工作目录变更（已暂存的变更不受影响）。只输出命令结果，不要解释。", changes)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	// Reset staged changes first, then restore working tree
+	runGitOutput(workDir, "reset", "HEAD", ".")
+	out, err := runGitOutput(workDir, "checkout", ".")
+	if err != nil && out != "" {
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "撤销出错", Content: out, Template: "red"})
+		return
+	}
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已撤销所有未提交的更改（原状态: %s）", changes))
+}
+
+func (r *Router) cmdStash(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	gitArgs := []string{"stash"}
+	if args != "" {
+		gitArgs = append(gitArgs, strings.Fields(args)...)
+	}
+	output, err := runGitOutput(workDir, gitArgs...)
+	tpl := "blue"
+	title := "git stash"
+	if args == "pop" || strings.HasPrefix(args, "pop ") {
+		title = "git stash pop"
+	}
+	if err != nil {
+		tpl = "red"
+		title += " 出错"
+	}
+	content := output
+	if content == "" {
+		content = "（无暂存变更）"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: content, Template: tpl})
 }
 
 func (r *Router) cmdLog(ctx context.Context, chatID, args string) {
