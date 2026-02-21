@@ -846,13 +846,50 @@ func (r *Router) cmdDebug(ctx context.Context, chatID string) {
 }
 
 func (r *Router) cmdRecent(ctx context.Context, chatID, args string) {
-	r.getSession(chatID) // ensure session exists
-	n := "10"
-	if args != "" {
-		n = args
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
 	}
-	prompt := fmt.Sprintf("List the %s most recently modified files by running `git log --pretty='' --name-only -n %s 2>/dev/null | grep -v '^$' | awk '!seen[$0]++' | head -%s`. If not a git repo, try `find . -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -newer . | head -%s`. Only show file paths, no explanation.", n, n, n, n)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	n := 10
+	if args != "" {
+		if parsed, err := fmt.Sscanf(args, "%d", &n); err != nil || parsed == 0 || n <= 0 {
+			r.sender.SendText(ctx, chatID, "用法: /recent [数量]\n示例: /recent 5")
+			return
+		}
+	}
+
+	// git log --pretty='' --name-only lists files changed per commit (with blanks between commits)
+	output, err := runGitOutput(workDir, "log", "--pretty=", "--name-only", fmt.Sprintf("-n%d", n*3))
+	if err != nil || output == "" {
+		r.sender.SendText(ctx, chatID, "当前目录不是 git 仓库或暂无提交记录。")
+		return
+	}
+
+	// Deduplicate file list (preserving order), limit to n
+	seen := make(map[string]bool)
+	var files []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		files = append(files, line)
+		if len(files) >= n {
+			break
+		}
+	}
+
+	if len(files) == 0 {
+		r.sender.SendText(ctx, chatID, "没有找到最近修改的文件。")
+		return
+	}
+
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("最近修改的 %d 个文件", len(files)),
+		Content: strings.Join(files, "\n"),
+	})
 }
 
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {

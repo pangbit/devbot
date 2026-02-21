@@ -2297,35 +2297,93 @@ func TestRouterTest_WithPattern(t *testing.T) {
 	}
 }
 
-// TestRouterRecent_NoArgs verifies that /recent without args triggers execution.
+// TestRouterRecent_NoArgs verifies that /recent without args shows some response.
 func TestRouterRecent_NoArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
+	// Non-git dir: should show "not a git repo" message
 	r.Route(context.Background(), "chat1", "user1", "/recent")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected /recent to trigger execution, got: %v", msgs)
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatalf("expected some response from /recent, got none")
 	}
 }
 
-// TestRouterRecent_WithCount verifies that /recent with count passes it.
+// TestRouterRecent_WithCount verifies that /recent with count works.
 func TestRouterRecent_WithCount(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/recent 5")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatalf("expected some response from /recent 5, got none")
 	}
-	if !hasExecuting {
-		t.Fatalf("expected /recent 5 to trigger execution, got: %v", msgs)
+}
+
+// TestRouterRecent_InvalidCount verifies that /recent with invalid count shows usage.
+func TestRouterRecent_InvalidCount(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/recent abc")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "用法") {
+		t.Fatalf("expected usage message for invalid count, got: %q", msg)
+	}
+}
+
+// TestRouterRecent_InGitRepo verifies that /recent shows recently modified files in a git repo.
+func TestRouterRecent_InGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/recent")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with recent files, texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "main.go") {
+		t.Fatalf("expected 'main.go' in recent files, got: %q", sender.cards[0].Content)
+	}
+}
+
+// TestRouterRecent_LimitsToN verifies /recent stops after n unique files.
+func TestRouterRecent_LimitsToN(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	// Commit 5 separate files
+	for i := 0; i < 5; i++ {
+		fname := fmt.Sprintf("file%d.go", i)
+		os.WriteFile(filepath.Join(dir, fname), []byte("package main"), 0644)
+		exec.Command("git", "-C", dir, "add", fname).Run()
+		exec.Command("git", "-C", dir, "commit", "-m", fmt.Sprintf("add %s", fname)).Run()
+	}
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	// Request only 3 recent files
+	r.Route(context.Background(), "chat1", "user1", "/recent 3")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card, texts: %v", sender.texts)
+	}
+	// Card should have 3 file lines
+	lines := strings.Split(strings.TrimSpace(sender.cards[0].Content), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 files in /recent 3, got %d: %q", len(lines), sender.cards[0].Content)
 	}
 }
 
