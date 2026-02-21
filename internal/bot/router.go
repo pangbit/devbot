@@ -123,6 +123,14 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		} else {
 			r.cmdGit(ctx, chatID, "stash "+args)
 		}
+	case "/log":
+		r.cmdLog(ctx, chatID, args)
+	case "/branch":
+		r.cmdBranch(ctx, chatID, args)
+	case "/cancel":
+		r.cmdKill(ctx, chatID)
+	case "/retry":
+		r.cmdRetry(ctx, chatID)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/file":
@@ -148,6 +156,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/status`  查看当前会话状态\n" +
 		"`/new`  开启新对话（保留当前会话到历史）\n" +
 		"`/kill`  终止正在执行的任务\n" +
+		"`/cancel`  同 /kill，终止当前任务\n" +
+		"`/retry`  重试上一条发给 Claude 的消息\n" +
 		"`/last`  显示上次输出\n" +
 		"`/summary`  让 Claude 总结上次输出\n" +
 		"`/model [name]`  查看/切换模型（haiku/sonnet/opus）\n" +
@@ -158,6 +168,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/switch <id>`  切换到指定历史会话\n\n" +
 		"**🔧 Git:**\n" +
 		"`/diff`  查看当前变更\n" +
+		"`/log [n]`  查看提交历史（默认最近 20 条）\n" +
+		"`/branch [name]`  查看分支列表或切换/创建分支\n" +
 		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
 		"`/push`  推送到远程\n" +
 		"`/undo`  撤销所有未提交的更改\n" +
@@ -495,6 +507,38 @@ func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 	r.getSession(chatID) // ensure session exists
 	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
 	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdLog(ctx context.Context, chatID, args string) {
+	r.getSession(chatID) // ensure session exists
+	count := "20"
+	if args != "" {
+		count = args
+	}
+	prompt := fmt.Sprintf("Run `git log --oneline -%s` in the current directory and return the output. Only show the command output, no explanation.", count)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdBranch(ctx context.Context, chatID, args string) {
+	r.getSession(chatID) // ensure session exists
+	if args == "" {
+		prompt := "Run `git branch -v` in the current directory and return the output, showing which branch is current. Only show the command output, no explanation."
+		r.execClaudeQueued(ctx, chatID, prompt)
+		return
+	}
+	// Create new branch or switch to existing
+	prompt := fmt.Sprintf("Run `git checkout -b %s 2>/dev/null || git checkout %s` in the current directory and return the output. Only show the command output, no explanation.", args, args)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdRetry(ctx context.Context, chatID string) {
+	session := r.getSession(chatID)
+	if session.LastPrompt == "" {
+		r.sender.SendText(ctx, chatID, "没有可重试的请求。")
+		return
+	}
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("重试: %s", session.LastPrompt))
+	r.execClaudeQueued(ctx, chatID, session.LastPrompt)
 }
 
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
@@ -868,6 +912,10 @@ func (r *Router) RouteDocShare(ctx context.Context, chatID, userID, docID string
 
 func (r *Router) handlePrompt(ctx context.Context, chatID, text string) {
 	r.getSession(chatID) // ensure session exists
+	// Save prompt before queuing so /retry is always available
+	r.store.UpdateSession(chatID, func(s *Session) {
+		s.LastPrompt = text
+	})
 	r.execClaudeQueued(ctx, chatID, text)
 }
 

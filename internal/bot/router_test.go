@@ -809,6 +809,89 @@ func TestRouterLast_WithOutput(t *testing.T) {
 	}
 }
 
+func TestRouterRetry_NoPrompt(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/retry")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "没有可重试") {
+		t.Fatalf("expected no-prompt message, got: %q", msg)
+	}
+}
+
+func TestRouterRetry_WithPrompt(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// Manually set a lastPrompt in the session
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.LastPrompt = "请帮我写一个Hello World"
+	})
+	r.Route(context.Background(), "chat1", "user1", "/retry")
+	msgs := sender.messages
+	// Should send the retry notification text
+	hasRetryMsg := false
+	for _, m := range msgs {
+		if strings.Contains(m, "重试") && strings.Contains(m, "Hello World") {
+			hasRetryMsg = true
+		}
+	}
+	if !hasRetryMsg {
+		t.Fatalf("expected retry message with prompt, got: %v", msgs)
+	}
+}
+
+func TestRouterCancel_AliasForKill(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/cancel")
+	msg := sender.LastMessage()
+	// No running task - should get the same response as /kill
+	if !strings.Contains(msg, "没有") {
+		t.Fatalf("expected no running task msg for /cancel, got: %q", msg)
+	}
+}
+
+func TestRouterHandlePrompt_SavesLastPrompt(t *testing.T) {
+	r, _ := newTestRouter(t)
+	r.getSession("chat1")
+	// handlePrompt is called for non-command messages
+	r.Route(context.Background(), "chat1", "user1", "my test prompt")
+	sess := r.store.GetSession("chat1", "", "")
+	if sess.LastPrompt != "my test prompt" {
+		t.Fatalf("expected lastPrompt to be saved, got: %q", sess.LastPrompt)
+	}
+}
+
+func TestRouterLog_DefaultCount(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// /log without args should trigger execution (not error/usage msg)
+	r.Route(context.Background(), "chat1", "user1", "/log")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /log to trigger execution, got: %v", msgs)
+	}
+}
+
+func TestRouterBranch_NoArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// /branch without args should trigger execution (show branches)
+	r.Route(context.Background(), "chat1", "user1", "/branch")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /branch to trigger execution, got: %v", msgs)
+	}
+}
+
 func TestRouterSetQueue(t *testing.T) {
 	r, _ := newTestRouter(t)
 	if r.queue != nil {

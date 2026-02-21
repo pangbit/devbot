@@ -14,6 +14,7 @@ type Session struct {
 	PermissionMode  string            `json:"permissionMode,omitempty"`
 	History         []string          `json:"history,omitempty"`
 	LastOutput      string            `json:"lastOutput,omitempty"`
+	LastPrompt      string            `json:"lastPrompt,omitempty"`
 	DirSessions     map[string]string `json:"dirSessions,omitempty"`
 }
 
