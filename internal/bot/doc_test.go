@@ -159,7 +159,7 @@ func TestDocPush_FileNotFound(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push nonexistent.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not found") && !strings.Contains(msg, "Error") {
+	if !strings.Contains(msg, "不存在") && !strings.Contains(msg, "出错") {
 		t.Fatalf("expected error for missing file, got: %q", msg)
 	}
 }
@@ -170,7 +170,7 @@ func TestDocPush_NoArgs(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
@@ -184,7 +184,7 @@ func TestDocPush_APIError(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Error") || !strings.Contains(msg, "API rate limit") {
+	if !strings.Contains(msg, "出错") || !strings.Contains(msg, "API rate limit") {
 		t.Fatalf("expected API error message, got: %q", msg)
 	}
 }
@@ -204,7 +204,7 @@ func TestDocPull_Success(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc pull test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Pulled") {
+	if !strings.Contains(msg, "文档已拉取") {
 		t.Fatalf("expected pull confirmation, got: %q", msg)
 	}
 
@@ -227,7 +227,7 @@ func TestDocPull_NoBinding(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc pull test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No binding") {
+	if !strings.Contains(msg, "未找到") {
 		t.Fatalf("expected no binding message, got: %q", msg)
 	}
 }
@@ -238,7 +238,7 @@ func TestDocPull_NoArgs(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc pull")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
@@ -254,7 +254,7 @@ func TestDocPull_APIError(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc pull test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Error") || !strings.Contains(msg, "network timeout") {
+	if !strings.Contains(msg, "出错") || !strings.Contains(msg, "network timeout") {
 		t.Fatalf("expected API error, got: %q", msg)
 	}
 }
@@ -267,7 +267,7 @@ func TestDocBind_WithURL(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc bind test.md https://example.feishu.cn/docx/ABC123")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Bound") {
+	if !strings.Contains(msg, "已绑定") {
 		t.Fatalf("expected bound confirmation, got: %q", msg)
 	}
 
@@ -284,7 +284,7 @@ func TestDocBind_WithRawID(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc bind test.md DOC999")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Bound") {
+	if !strings.Contains(msg, "已绑定") {
 		t.Fatalf("expected bound confirmation, got: %q", msg)
 	}
 
@@ -301,7 +301,7 @@ func TestDocBind_NoArgs(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc bind")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
@@ -312,7 +312,7 @@ func TestDocBind_MissingDocID(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc bind test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
@@ -327,7 +327,7 @@ func TestDocUnbind(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc unbind test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Unbound") {
+	if !strings.Contains(msg, "已解除绑定") {
 		t.Fatalf("expected unbound confirmation, got: %q", msg)
 	}
 
@@ -343,7 +343,7 @@ func TestDocUnbind_NotFound(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc unbind nonexistent_binding.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No binding found") {
+	if !strings.Contains(msg, "未找到") {
 		t.Fatalf("expected 'No binding found' message, got: %q", msg)
 	}
 }
@@ -354,7 +354,7 @@ func TestDocUnbind_NoArgs(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc unbind")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
@@ -367,7 +367,7 @@ func TestDocList_Empty(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc list")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No bindings") {
+	if !strings.Contains(msg, "暂无绑定") {
 		t.Fatalf("expected no bindings message, got: %q", msg)
 	}
 }
@@ -395,7 +395,7 @@ func TestDoc_NotConfigured(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not configured") {
+	if !strings.Contains(msg, "未配置") {
 		t.Fatalf("expected not configured message, got: %q", msg)
 	}
 }
@@ -406,7 +406,7 @@ func TestDoc_NotConfigured_ListStillWorks(t *testing.T) {
 	// list, bind, unbind should still work without DocPusher
 	r.Route(context.Background(), "chat1", "user1", "/doc list")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No bindings") {
+	if !strings.Contains(msg, "暂无绑定") {
 		t.Fatalf("expected no bindings, got: %q", msg)
 	}
 }
@@ -489,7 +489,7 @@ func TestDocPull_WriteFileError(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc pull README.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Error writing file") {
+	if !strings.Contains(msg, "写入文件出错") {
 		t.Fatalf("expected write error message, got: %q", msg)
 	}
 }
@@ -508,7 +508,7 @@ func TestDocPull_OutsideRoot(t *testing.T) {
 	// Query by filename — fuzzy match finds it, but underRoot check rejects it.
 	r.Route(context.Background(), "chat1", "user1", "/doc pull outsidefile_zzz.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Cannot access files outside work root") {
+	if !strings.Contains(msg, "不允许访问工作根目录以外") {
 		t.Fatalf("expected outside work root rejection, got: %q", msg)
 	}
 }
@@ -520,7 +520,7 @@ func TestDocPush_AbsolutePath(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push /absolute/path/file.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not found") && !strings.Contains(msg, "Error") {
+	if !strings.Contains(msg, "不存在") && !strings.Contains(msg, "出错") {
 		t.Fatalf("expected error for absolute path, got: %q", msg)
 	}
 }
@@ -539,7 +539,7 @@ func TestDocPull_FuzzyBinding(t *testing.T) {
 	// Pull using fuzzy path "readme"
 	r.Route(context.Background(), "chat1", "user1", "/doc pull readme")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Pulled") {
+	if !strings.Contains(msg, "文档已拉取") {
 		t.Fatalf("expected pull confirmation, got: %q", msg)
 	}
 
@@ -558,7 +558,7 @@ func TestDocPull_NotConfigured(t *testing.T) {
 	r, sender, _ := newTestRouterWithDoc(t, nil)
 	r.Route(context.Background(), "chat1", "user1", "/doc pull test.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not configured") {
+	if !strings.Contains(msg, "未配置") {
 		t.Fatalf("expected 'not configured' message, got: %q", msg)
 	}
 }
@@ -577,7 +577,7 @@ func TestDocPush_OutsideRoot(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push outside.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Cannot access files outside work root") {
+	if !strings.Contains(msg, "不允许访问工作根目录以外") {
 		t.Fatalf("expected outside root rejection, got: %q", msg)
 	}
 }
@@ -596,7 +596,7 @@ func TestDocPush_ReadError(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc push secret.md")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Error reading file") {
+	if !strings.Contains(msg, "读取文件出错") {
 		t.Fatalf("expected read error message, got: %q", msg)
 	}
 }
@@ -614,7 +614,7 @@ func TestDocBind_OutsideRoot(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc bind file.md DOCID123")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Cannot access files outside work root") {
+	if !strings.Contains(msg, "不允许访问工作根目录以外") {
 		t.Fatalf("expected outside root rejection, got: %q", msg)
 	}
 }
@@ -630,7 +630,7 @@ func TestDocUnbind_FuzzyBinding(t *testing.T) {
 	// Unbind using fuzzy path
 	r.Route(context.Background(), "chat1", "user1", "/doc unbind readme")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Unbound") {
+	if !strings.Contains(msg, "已解除绑定") {
 		t.Fatalf("expected unbind confirmation, got: %q", msg)
 	}
 

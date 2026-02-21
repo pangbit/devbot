@@ -268,7 +268,7 @@ func (r *Router) cmdLs(ctx context.Context, chatID string) {
 	root := r.store.WorkRoot()
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("读取目录出错: %v", err))
 		return
 	}
 	var dirs []string
@@ -319,7 +319,7 @@ func (r *Router) cmdRoot(ctx context.Context, chatID, args string) {
 
 func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /cd <directory>")
+		r.sender.SendText(ctx, chatID, "用法: /cd <目录名>\n示例: /cd myproject\n\n使用 /ls 查看可用项目列表。")
 		return
 	}
 	r.getSession(chatID) // ensure session exists
@@ -335,7 +335,7 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 
 	// Prevent path traversal outside work root
 	if !underRoot(root, target) {
-		r.sender.SendText(ctx, chatID, "Cannot cd outside of work root: "+root)
+		r.sender.SendText(ctx, chatID, "不允许切换到工作根目录以外的路径: "+root)
 		return
 	}
 
@@ -498,7 +498,7 @@ func (r *Router) cmdSafe(ctx context.Context, chatID string) {
 func (r *Router) cmdLast(ctx context.Context, chatID string) {
 	session := r.getSession(chatID)
 	if session.LastOutput == "" {
-		r.sender.SendText(ctx, chatID, "No previous output.")
+		r.sender.SendText(ctx, chatID, "暂无历史输出，请先发送消息给 Claude。")
 		return
 	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Content: session.LastOutput})
@@ -507,7 +507,7 @@ func (r *Router) cmdLast(ctx context.Context, chatID string) {
 func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 	session := r.getSession(chatID)
 	if session.LastOutput == "" {
-		r.sender.SendText(ctx, chatID, "No previous output to summarize.")
+		r.sender.SendText(ctx, chatID, "暂无可总结的输出，请先发送消息给 Claude。")
 		return
 	}
 	prompt := "Please summarize the following output concisely:\n\n" + session.LastOutput
@@ -630,18 +630,18 @@ func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 
 func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /file <path>")
+		r.sender.SendText(ctx, chatID, "用法: /file <文件路径>\n示例: /file README.md\n示例: /file src/main.go")
 		return
 	}
 	session := r.getSession(chatID)
 	target := findFile(session.WorkDir, args)
 	if target == "" {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("File not found: %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("文件不存在: %s", args))
 		return
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error reading file: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("读取文件出错: %v", err))
 		return
 	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: filepath.Base(target), Content: "```\n" + string(data) + "\n```"})
@@ -795,30 +795,30 @@ func (r *Router) cmdDoc(ctx context.Context, chatID, args string) {
 
 func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
 	if r.docSyncer == nil {
-		r.sender.SendText(ctx, chatID, "Doc sync not configured.")
+		r.sender.SendText(ctx, chatID, "飞书文档同步未配置，请联系管理员检查 API 配置。")
 		return
 	}
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /doc push <path>")
+		r.sender.SendText(ctx, chatID, "用法: /doc push <文件路径>\n示例: /doc push README.md")
 		return
 	}
 
 	session := r.getSession(chatID)
 	filePath := resolveFilePath(session.WorkDir, args)
 	if filePath == "" {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("File not found: %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("文件不存在: %s", args))
 		return
 	}
 
 	root := r.store.WorkRoot()
 	if !underRoot(root, filePath) {
-		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		r.sender.SendText(ctx, chatID, "不允许访问工作根目录以外的文件: "+root)
 		return
 	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error reading file: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("读取文件出错: %v", err))
 		return
 	}
 
@@ -827,58 +827,58 @@ func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
 
 	docID, docURL, err := r.docSyncer.CreateAndPushDoc(ctx, title, content)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error pushing doc: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("推送文档出错: %v", err))
 		return
 	}
 
 	r.store.SetDocBinding(filePath, docID)
 	r.save()
 
-	md := fmt.Sprintf("**ID:** %s\n**URL:** [%s](%s)", docID, docURL, docURL)
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Doc Pushed", Content: md})
+	md := fmt.Sprintf("**文档 ID:** %s\n**链接:** [%s](%s)", docID, docURL, docURL)
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "✓ 文档已推送", Content: md})
 }
 
 func (r *Router) cmdDocPull(ctx context.Context, chatID, args string) {
 	if r.docSyncer == nil {
-		r.sender.SendText(ctx, chatID, "Doc sync not configured.")
+		r.sender.SendText(ctx, chatID, "飞书文档同步未配置，请联系管理员检查 API 配置。")
 		return
 	}
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /doc pull <path>")
+		r.sender.SendText(ctx, chatID, "用法: /doc pull <文件路径>\n示例: /doc pull README.md\n\n需先用 /doc bind 绑定文件到飞书文档。")
 		return
 	}
 
 	session := r.getSession(chatID)
 	filePath, docID := r.findDocBinding(session.WorkDir, args)
 	if docID == "" {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("No binding found for %s. Use /doc bind first.", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到 %s 的绑定关系，请先用 /doc bind 绑定到飞书文档。", args))
 		return
 	}
 
 	root := r.store.WorkRoot()
 	if !underRoot(root, filePath) {
-		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		r.sender.SendText(ctx, chatID, "不允许访问工作根目录以外的文件: "+root)
 		return
 	}
 
 	content, err := r.docSyncer.PullDocContent(ctx, docID)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error pulling doc: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("拉取文档出错: %v", err))
 		return
 	}
 
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Error writing file: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("写入文件出错: %v", err))
 		return
 	}
 
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Pulled doc %s to %s", docID, args))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 文档已拉取到: %s", args))
 }
 
 func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) {
 	parts := strings.SplitN(args, " ", 2)
 	if len(parts) < 2 {
-		r.sender.SendText(ctx, chatID, "Usage: /doc bind <path> <docURL or docID>")
+		r.sender.SendText(ctx, chatID, "用法: /doc bind <文件路径> <文档URL或ID>\n示例: /doc bind README.md https://example.feishu.cn/docx/xxx")
 		return
 	}
 
@@ -891,7 +891,7 @@ func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) {
 
 	root := r.store.WorkRoot()
 	if !underRoot(root, filePath) {
-		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
+		r.sender.SendText(ctx, chatID, "不允许访问工作根目录以外的文件: "+root)
 		return
 	}
 
@@ -899,32 +899,32 @@ func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) {
 	r.store.SetDocBinding(filePath, docID)
 	r.save()
 
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Bound %s -> %s", parts[0], docID))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已绑定: %s → %s", parts[0], docID))
 }
 
 func (r *Router) cmdDocUnbind(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /doc unbind <path>")
+		r.sender.SendText(ctx, chatID, "用法: /doc unbind <文件路径>\n示例: /doc unbind README.md")
 		return
 	}
 
 	session := r.getSession(chatID)
 	filePath, docID := r.findDocBinding(session.WorkDir, args)
 	if docID == "" {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("No binding found for %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到 %s 的绑定关系，使用 /doc list 查看已有绑定。", args))
 		return
 	}
 
 	r.store.RemoveDocBinding(filePath)
 	r.save()
 
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Unbound %s", args))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已解除绑定: %s", args))
 }
 
 func (r *Router) cmdDocList(ctx context.Context, chatID string) {
 	bindings := r.store.DocBindings()
 	if len(bindings) == 0 {
-		r.sender.SendText(ctx, chatID, "No bindings.")
+		r.sender.SendText(ctx, chatID, "暂无绑定关系。使用 /doc bind <路径> <URL> 创建绑定。")
 		return
 	}
 
@@ -932,7 +932,7 @@ func (r *Router) cmdDocList(ctx context.Context, chatID string) {
 	for path, docID := range bindings {
 		lines = append(lines, fmt.Sprintf("**%s** -> %s", path, docID))
 	}
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Doc Bindings", Content: strings.Join(lines, "\n")})
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "文档绑定列表", Content: strings.Join(lines, "\n")})
 }
 
 func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string) {
@@ -950,12 +950,12 @@ func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageDat
 	}
 	imgPath := filepath.Join(imgDir, filepath.Base(fileName))
 	if err := os.WriteFile(imgPath, imageData, 0644); err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to save image: %v", err))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("图片保存失败: %v", err))
 		return
 	}
 
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Image saved to: %s", imgPath))
-	prompt := fmt.Sprintf("User sent an image, saved to: %s. Describe or process this image as needed.", imgPath)
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 图片已保存: %s", imgPath))
+	prompt := fmt.Sprintf("用户发来了一张图片，已保存到: %s。请描述或处理这张图片。", imgPath)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
@@ -986,11 +986,11 @@ func (r *Router) RouteTextWithImages(ctx context.Context, chatID, userID, text s
 	// Build prompt combining text and image paths
 	var prompt string
 	if text != "" && len(savedPaths) > 0 {
-		prompt = text + "\n\nAttached images: " + strings.Join(savedPaths, ", ")
+		prompt = text + "\n\n附带图片路径: " + strings.Join(savedPaths, ", ")
 	} else if text != "" {
 		prompt = text
 	} else if len(savedPaths) > 0 {
-		prompt = fmt.Sprintf("User sent an image, saved to: %s. Describe or process this image as needed.", savedPaths[0])
+		prompt = fmt.Sprintf("用户发来了一张图片，已保存到: %s。请描述或处理这张图片。", savedPaths[0])
 	} else {
 		return
 	}
@@ -1013,7 +1013,7 @@ func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string,
 	}
 
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 文件已保存: %s", filePath))
-	prompt := fmt.Sprintf("User sent a file '%s', saved to: %s. Examine or process this file as needed.", fileName, filePath)
+	prompt := fmt.Sprintf("用户发来了文件 '%s'，已保存到: %s。请检查或处理这个文件。", fileName, filePath)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 

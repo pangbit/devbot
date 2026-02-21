@@ -212,7 +212,7 @@ func TestRouterLast_NoOutput(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/last")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No previous") {
+	if !strings.Contains(msg, "暂无历史输出") {
 		t.Fatalf("expected no previous output msg, got: %q", msg)
 	}
 }
@@ -248,7 +248,7 @@ func TestRouterFile_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/file")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage:") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message for /file with no args, got: %q", msg)
 	}
 }
@@ -257,7 +257,7 @@ func TestRouterFileNotFound(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/file nonexistent.txt")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not found") {
+	if !strings.Contains(msg, "不存在") {
 		t.Fatalf("expected not found, got: %q", msg)
 	}
 }
@@ -266,7 +266,7 @@ func TestRouterCd_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/cd")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage:") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }
@@ -287,7 +287,7 @@ func TestRouterCdPathTraversal(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/cd ../../etc")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "work root") {
+	if !strings.Contains(msg, "工作根目录") {
 		t.Fatalf("expected path traversal rejection, got: %q", msg)
 	}
 }
@@ -325,7 +325,7 @@ func TestRouterRouteImageSavesAndSendsPrompt(t *testing.T) {
 		t.Fatalf("expected at least one message")
 	}
 	// First message should confirm the image was saved
-	if !strings.Contains(sender.messages[0], "Image saved to:") {
+	if !strings.Contains(sender.messages[0], "图片已保存") {
 		t.Fatalf("expected 'Image saved to:' message, got: %q", sender.messages[0])
 	}
 	if !strings.Contains(sender.messages[0], ".devbot-images") {
@@ -770,7 +770,7 @@ func TestRouterSummary_NoOutput(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/summary")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No previous output") {
+	if !strings.Contains(msg, "暂无可总结") {
 		t.Fatalf("expected no output msg, got: %q", msg)
 	}
 }
@@ -931,7 +931,7 @@ func TestRouterLs_ReadDirError(t *testing.T) {
 	r.store.SetWorkRoot("/nonexistent_dir_for_test_xyz")
 	r.Route(context.Background(), "chat1", "user1", "/ls")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Error:") {
+	if !strings.Contains(msg, "读取目录出错") {
 		t.Fatalf("expected error message from /ls with bad root, got: %q", msg)
 	}
 }
@@ -952,7 +952,7 @@ func TestRouterFile_ReadError(t *testing.T) {
 	sender := r.sender.(*spySender)
 	r.Route(context.Background(), "chat1", "user1", "/file secret.txt")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Error reading file") {
+	if !strings.Contains(msg, "读取文件出错") {
 		t.Fatalf("expected read error message, got: %q", msg)
 	}
 }
@@ -1087,7 +1087,7 @@ func TestRouterFile_AbsolutePath(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/file /absolute/path.txt")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not found") {
+	if !strings.Contains(msg, "不存在") {
 		t.Fatalf("expected not found for absolute path, got: %q", msg)
 	}
 }
@@ -1107,7 +1107,7 @@ func TestRouterRouteImage_WriteFileError(t *testing.T) {
 
 	r.RouteImage(context.Background(), "chat1", "user1", []byte("data"), "test.png")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Failed to save image") {
+	if !strings.Contains(msg, "图片保存失败") {
 		t.Fatalf("expected save image error, got: %q", msg)
 	}
 }
