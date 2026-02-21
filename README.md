@@ -195,6 +195,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/show [commit]` — 查看提交详情（默认 HEAD，即时响应）
 - `/branch [name]` — 查看分支列表，或创建/切换分支
 - `/commit [msg]` — 提交变更（提供消息则即时执行，不填则 Claude 自动生成）
+- `/fetch [args]` — 从远程获取但不合并（即时响应，自动 prune）
 - `/pull [args]` — 从远程拉取（即时响应）
 - `/push [args]` — 推送到远程（即时响应，支持 `--force` 等参数）
 - `/pr [title]` — 创建 Pull Request（使用 gh CLI）

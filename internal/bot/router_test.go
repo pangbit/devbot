@@ -3148,6 +3148,58 @@ func TestRouterExec_LargeOutputTruncated(t *testing.T) {
 	}
 }
 
+// --- /fetch tests ---
+
+func TestRouterFetch_NoRemote(t *testing.T) {
+	// In a git repo with no remote, fetch returns success with no output
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/fetch")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /fetch")
+	}
+	// Either success (no remote = no output, "已是最新") or error
+	if sender.cards[0].Title == "" {
+		t.Fatalf("expected non-empty title, got empty")
+	}
+}
+
+func TestRouterFetch_Success(t *testing.T) {
+	// Clone from a bare remote, fetch back from it
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	os.MkdirAll(remoteDir, 0755)
+	exec.Command("git", "-C", remoteDir, "init", "--bare").Run()
+
+	localDir := filepath.Join(dir, "local")
+	exec.Command("git", "clone", remoteDir, localDir).Run()
+	exec.Command("git", "-C", localDir, "commit", "--allow-empty", "-m", "init").Run()
+	exec.Command("git", "-C", localDir, "push", "origin", "HEAD:main").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	// Use localDir as work root directly
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, localDir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/fetch")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /fetch")
+	}
+	// Should be success (blue template)
+	if sender.cards[0].Template == "red" {
+		t.Fatalf("expected success, got error: %q", sender.cards[0].Content)
+	}
+}
+
 // --- /pull tests ---
 
 func TestRouterPull_NoRemote(t *testing.T) {
