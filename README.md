@@ -193,6 +193,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/diff` — 查看当前变更（即时响应，含未暂存和已暂存的更改）
 - `/log [n]` — 查看提交历史（默认最近 20 条，即时响应）
 - `/show [commit]` — 查看提交详情（默认 HEAD，即时响应）
+- `/blame <file>` — 查看文件每行最后修改者（即时响应）
 - `/branch [name]` — 查看分支列表，或创建/切换分支
 - `/commit [msg]` — 提交变更（提供消息则即时执行，不填则 Claude 自动生成）
 - `/fetch [args]` — 从远程获取但不合并（即时响应，自动 prune）

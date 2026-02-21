@@ -2888,6 +2888,57 @@ func TestRouterLog_ErrorWithOutput(t *testing.T) {
 	}
 }
 
+// --- /blame tests ---
+
+func TestRouterBlame_NoArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/blame")
+	if !strings.Contains(sender.LastMessage(), "用法") {
+		t.Fatalf("expected usage message, got: %q", sender.LastMessage())
+	}
+}
+
+func TestRouterBlame_InGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+	os.WriteFile(filepath.Join(dir, "foo.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add foo").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/blame foo.go")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a blame card")
+	}
+	if !strings.Contains(sender.cards[0].Content, "func main") {
+		t.Fatalf("expected file content in blame, got: %q", sender.cards[0].Content[:min(200, len(sender.cards[0].Content))])
+	}
+}
+
+func TestRouterBlame_FileNotExist(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/blame nonexistent.go")
+
+	if !strings.Contains(sender.LastMessage(), "无法查看") {
+		t.Fatalf("expected error message, got: %q", sender.LastMessage())
+	}
+}
+
 // --- /show tests ---
 
 func TestRouterShow_NoArgs_InGitRepo(t *testing.T) {

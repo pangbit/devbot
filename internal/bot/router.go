@@ -133,6 +133,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdLog(ctx, chatID, args)
 	case "/show":
 		r.cmdShow(ctx, chatID, args)
+	case "/blame":
+		r.cmdBlame(ctx, chatID, args)
 	case "/branch":
 		r.cmdBranch(ctx, chatID, args)
 	case "/cancel":
@@ -204,6 +206,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/diff`  查看当前变更\n" +
 		"`/log [n]`  查看提交历史（默认最近 20 条）\n" +
 		"`/show [commit]`  查看提交详情（默认最新提交 HEAD）\n" +
+		"`/blame <file>`  查看文件每行的最后修改者\n" +
 		"`/branch [name]`  查看分支列表或切换/创建分支\n" +
 		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
 		"`/fetch [args]`  从远程获取但不合并（即时响应，自动 prune）\n" +
@@ -361,9 +364,14 @@ func (r *Router) cmdLs(ctx context.Context, chatID, args string) {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
+		projectDir := filepath.Join(root, e.Name())
 		line := e.Name()
-		if branch := gitBranch(filepath.Join(root, e.Name())); branch != "" {
-			line += fmt.Sprintf("  [%s]", branch)
+		if branch := gitBranch(projectDir); branch != "" {
+			dirty := ""
+			if summary := gitStatusSummary(projectDir); summary != "" && summary != "无变更" {
+				dirty = " ●"
+			}
+			line += fmt.Sprintf("  [%s%s]", branch, dirty)
 		}
 		lines = append(lines, line)
 	}
@@ -864,6 +872,31 @@ func (r *Router) cmdShow(ctx context.Context, chatID, args string) {
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + combined + "\n```"})
 }
 
+func (r *Router) cmdBlame(ctx context.Context, chatID, args string) {
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "用法: /blame <文件路径>\n示例: /blame main.go\n示例: /blame internal/bot/router.go")
+		return
+	}
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	output, err := runGitOutput(workDir, "blame", "--date=short", args)
+	if err != nil || output == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("无法查看 blame: %s\n%s", args, output))
+		return
+	}
+	const maxOut = 4000
+	if runes := []rune(output); len(runes) > maxOut {
+		output = fmt.Sprintf("（内容过长，仅显示前 %d 字符）\n\n", maxOut) + string(runes[:maxOut])
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("git blame %s", filepath.Base(args)),
+		Content: "```\n" + output + "\n```",
+	})
+}
+
 func (r *Router) cmdBranch(ctx context.Context, chatID, args string) {
 	session := r.getSession(chatID)
 	workDir := session.WorkDir
@@ -1313,7 +1346,7 @@ var knownCommands = []string{
 	"/pwd", "/ls", "/root", "/cd",
 	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
 	"/last", "/summary", "/model", "/yolo", "/safe",
-	"/git", "/diff", "/log", "/show", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
+	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
 	"/undo", "/stash",
 	"/grep", "/find", "/test", "/todo", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
