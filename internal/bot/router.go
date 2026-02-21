@@ -145,6 +145,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdPR(ctx, chatID, args)
 	case "/compact":
 		r.cmdCompact(ctx, chatID)
+	case "/find":
+		r.cmdFind(ctx, chatID, args)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/file":
@@ -197,7 +199,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/git <args>`  执行任意 git 命令\n\n" +
 		"**📁 文件与搜索:**\n" +
-		"`/grep <pattern>`  在代码中搜索关键词\n" +
+		"`/grep <pattern>`  在代码中搜索关键词（内容搜索）\n" +
+		"`/find <name>`  按文件名查找文件（支持通配符，如 *.go）\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/sh <cmd>`  通过 Claude 执行 Shell 命令\n\n" +
 		"**📄 飞书文档同步:**\n" +
@@ -414,12 +417,25 @@ func (r *Router) cmdSessions(ctx context.Context, chatID string) {
 		r.sender.SendText(ctx, chatID, "暂无历史会话。发送消息后会自动创建会话。")
 		return
 	}
+	// Build reverse map: sessionID -> workDir for context display
+	reverseDir := make(map[string]string)
+	for dir, sid := range session.DirSessions {
+		reverseDir[sid] = dir
+	}
 	var lines []string
 	for i, id := range session.History {
-		lines = append(lines, fmt.Sprintf("  `%d`: %s  （使用 `/switch %d` 恢复）", i, id, i))
+		dirHint := ""
+		if dir, ok := reverseDir[id]; ok && dir != "" {
+			dirHint = " `" + filepath.Base(dir) + "`"
+		}
+		lines = append(lines, fmt.Sprintf("  `%d`:%s `%s`  → `/switch %d`", i, dirHint, id, i))
 	}
 	if session.ClaudeSessionID != "" {
-		lines = append(lines, fmt.Sprintf("\n**当前:** `%s`", session.ClaudeSessionID))
+		dirHint := ""
+		if dir, ok := reverseDir[session.ClaudeSessionID]; ok && dir != "" {
+			dirHint = " `" + filepath.Base(dir) + "`"
+		}
+		lines = append(lines, fmt.Sprintf("\n**当前:%s** `%s`", dirHint, session.ClaudeSessionID))
 	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: "历史会话", Content: strings.Join(lines, "\n")})
 }
@@ -640,6 +656,16 @@ func (r *Router) cmdCompact(ctx context.Context, chatID string) {
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+func (r *Router) cmdFind(ctx context.Context, chatID, args string) {
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "用法: /find <文件名模式>\n示例: /find main.go\n示例: /find *.ts")
+		return
+	}
+	r.getSession(chatID) // ensure session exists
+	prompt := fmt.Sprintf("Run `find . -name %q -not -path '*/node_modules/*' -not -path '*/.git/*' | head -30` in the current directory and return the matching file paths. Only show the output, no explanation.", args)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -714,7 +740,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
 	"/undo", "/stash",
-	"/grep", "/sh", "/file", "/compact",
+	"/grep", "/find", "/sh", "/file", "/compact",
 	"/doc",
 }
 

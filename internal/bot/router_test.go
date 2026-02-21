@@ -2115,6 +2115,59 @@ func TestRouterStatus_WhenRunning(t *testing.T) {
 	<-done
 }
 
+// TestRouterFind_EmptyArgs verifies that /find without args shows usage.
+func TestRouterFind_EmptyArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/find")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "用法") {
+		t.Fatalf("expected usage message for /find with no args, got: %q", msg)
+	}
+}
+
+// TestRouterFind_WithPattern verifies that /find with pattern triggers Claude.
+func TestRouterFind_WithPattern(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/find *.go")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /find to trigger execution, got: %v", msgs)
+	}
+}
+
+// TestRouterSessions_ShowsDirHint verifies that /sessions shows workDir context.
+func TestRouterSessions_ShowsDirHint(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("/nonexistent_for_test", "sonnet", 5*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Set up a session with DirSessions and history
+	store.GetSession("chat1", dir, "sonnet")
+	store.UpdateSession("chat1", func(s *Session) {
+		s.DirSessions = map[string]string{
+			"/home/user/myproject": "old-session-id",
+		}
+		s.History = []string{"old-session-id"}
+		s.ClaudeSessionID = "current-session-id"
+		s.DirSessions["current-dir"] = "current-session-id"
+	})
+
+	r.Route(context.Background(), "chat1", "user1", "/sessions")
+	msg := sender.LastMessage()
+	// Should show "myproject" as dir hint for old session
+	if !strings.Contains(msg, "myproject") {
+		t.Fatalf("expected workDir hint 'myproject' in sessions output, got: %q", msg)
+	}
+}
+
 // TestRouterCompact verifies that /compact sends a summarization prompt to Claude.
 func TestRouterCompact(t *testing.T) {
 	r, sender := newTestRouter(t)
