@@ -86,6 +86,30 @@ func TestRouterPing(t *testing.T) {
 	}
 }
 
+func TestRouterStatus_WithExec(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte("#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"ok\",\"session_id\":\"s1\"}'\n"), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Run an execution first so ExecCount > 0
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	r.Route(context.Background(), "chat1", "user1", "/status")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Execs:**    1") {
+		t.Fatalf("expected Execs: 1 after one execution, got: %q", msg)
+	}
+	// LastExec should not be "-" after an execution
+	if strings.Contains(msg, "LastExec:** -") {
+		t.Fatalf("expected non-dash LastExec after execution, got: %q", msg)
+	}
+}
+
 func TestRouterStatus(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/status")
@@ -219,12 +243,42 @@ func TestRouterFile(t *testing.T) {
 	}
 }
 
+func TestRouterFile_EmptyArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/file")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Usage:") {
+		t.Fatalf("expected usage message for /file with no args, got: %q", msg)
+	}
+}
+
 func TestRouterFileNotFound(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/file nonexistent.txt")
 	msg := sender.LastMessage()
 	if !strings.Contains(msg, "not found") {
 		t.Fatalf("expected not found, got: %q", msg)
+	}
+}
+
+func TestRouterCd_EmptyArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/cd")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Usage:") {
+		t.Fatalf("expected usage message, got: %q", msg)
+	}
+}
+
+func TestRouterCd_AbsPath(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// Use the actual work root dir as absolute path — valid absolute path within root
+	workRoot := r.store.WorkRoot()
+	subDir := filepath.Join(workRoot, "project1")
+	r.Route(context.Background(), "chat1", "user1", "/cd "+subDir)
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Changed to") {
+		t.Fatalf("expected changed to message, got: %q", msg)
 	}
 }
 
@@ -383,6 +437,67 @@ func TestRouterRouteTextWithImages_OnlyImages(t *testing.T) {
 	if len(msgs) == 0 {
 		t.Fatalf("expected at least one message when images provided without text")
 	}
+}
+
+func TestRouterRouteImage_MkdirError(t *testing.T) {
+	r, sender := newTestRouter(t)
+	session := r.getSession("chat1")
+
+	// Make session.WorkDir point to a file (not a dir) so MkdirAll fails
+	// when trying to create .devbot-images inside it.
+	fakeDirPath := filepath.Join(session.WorkDir, "notadir")
+	os.WriteFile(fakeDirPath, []byte("file content"), 0644)
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.WorkDir = fakeDirPath
+	})
+
+	r.RouteImage(context.Background(), "chat1", "user1", []byte("data"), "test.png")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Failed to create image directory") {
+		t.Fatalf("expected mkdir error message, got: %q", msg)
+	}
+}
+
+func TestRouterRouteFile_WriteError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	r, sender := newTestRouter(t)
+	session := r.getSession("chat1")
+	workDir := session.WorkDir
+
+	// Make workDir read-only so WriteFile fails
+	os.Chmod(workDir, 0555)
+	defer os.Chmod(workDir, 0755)
+
+	r.RouteFile(context.Background(), "chat1", "user1", "data.txt", []byte("content"))
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Failed to save file") {
+		t.Fatalf("expected save failure message, got: %q", msg)
+	}
+}
+
+func TestRouterRouteTextWithImages_ImageSaveFail(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	r, _, q := newTestRouterForExec(t)
+	session := r.getSession("chat1")
+
+	// Pre-create .devbot-images as a non-writable dir so WriteFile inside fails.
+	imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+	os.MkdirAll(imgDir, 0755)
+	os.Chmod(imgDir, 0555) // no write
+	defer os.Chmod(imgDir, 0755)
+
+	images := []ImageAttachment{
+		{Data: []byte("data"), FileName: "photo.jpg"},
+	}
+	// Only images, no text — when all images fail to save, prompt is built with no paths.
+	// The function returns early because savedPaths is empty and text is also empty.
+	r.RouteTextWithImages(context.Background(), "chat1", "user1", "", images)
+	q.Shutdown()
+	// No panic or hang — the image save failure is logged and skipped.
 }
 
 func TestRouterRouteTextWithImages_NoImages(t *testing.T) {
@@ -695,6 +810,259 @@ func TestRouterSetQueue(t *testing.T) {
 	if r.queue != q {
 		t.Fatalf("expected queue to be set")
 	}
+}
+
+func TestRouterLs_Empty(t *testing.T) {
+	dir := t.TempDir()
+	// Only hidden dirs — no non-hidden subdirs
+	os.Mkdir(filepath.Join(dir, ".hidden"), 0755)
+
+	store, err := NewStore(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	sender := &spySender{}
+	exec := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), exec, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/ls")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "No projects found") {
+		t.Fatalf("expected 'No projects found' message, got: %q", msg)
+	}
+}
+
+func TestRouterLs_ReadDirError(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// Point work root to a non-existent directory to force ReadDir error
+	r.store.SetWorkRoot("/nonexistent_dir_for_test_xyz")
+	r.Route(context.Background(), "chat1", "user1", "/ls")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Error:") {
+		t.Fatalf("expected error message from /ls with bad root, got: %q", msg)
+	}
+}
+
+func TestRouterFile_ReadError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	r, _ := newTestRouter(t)
+	session := r.getSession("chat1")
+
+	// Create a file that exists but has no read permission
+	secret := filepath.Join(session.WorkDir, "secret.txt")
+	os.WriteFile(secret, []byte("cannot read"), 0644)
+	os.Chmod(secret, 0000)
+	defer os.Chmod(secret, 0644)
+
+	sender := r.sender.(*spySender)
+	r.Route(context.Background(), "chat1", "user1", "/file secret.txt")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Error reading file") {
+		t.Fatalf("expected read error message, got: %q", msg)
+	}
+}
+
+func TestRouterKill_Running(t *testing.T) {
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	script := filepath.Join(dir, "claude")
+	// Use "exec sleep" so the shell replaces itself with sleep (same PID).
+	// This ensures killing the process closes the pipe and unblocks the scanner.
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ntouch %s\nexec sleep 10000\n", readyPath)), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	snd := &syncSpySender{}
+	exec := NewClaudeExecutor(script, "sonnet", 60*time.Second)
+	r := NewRouter(context.Background(), exec, store, snd, map[string]bool{"user1": true}, dir, nil)
+
+	ctx := context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Route(ctx, "chat1", "user1", "run a long task")
+	}()
+
+	// Wait for the script to start (file appears when ready)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(readyPath); err != nil {
+		t.Fatal("script did not start within 5s")
+	}
+
+	// Kill the running process
+	r.Route(ctx, "chat2", "user1", "/kill")
+
+	// Wait for the first route to complete
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected route goroutine to finish after kill")
+	}
+
+	msgs := snd.Messages()
+	found := false
+	for _, m := range msgs {
+		if m == "Task killed." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'Task killed.' message, got: %v", msgs)
+	}
+}
+
+func TestRouterSave_StoreError(t *testing.T) {
+	r, _ := newTestRouter(t)
+	// Set store path to an invalid location so Save() fails.
+	r.store.path = "/nonexistent_root_xyz_test/subdir/state.json"
+	// save() should log the error but not panic.
+	r.save()
+}
+
+func TestRouterExecClaudeQueued_QueueFull(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+
+	// Block the worker so the queue can fill up.
+	done := make(chan struct{})
+	q.Enqueue("chat1", func() { <-done })
+
+	// Fill queue to capacity (100 slots).
+	for i := 0; i < 100; i++ {
+		q.Enqueue("chat1", func() {})
+	}
+
+	// One more message — queue is full, should get error reply.
+	r.Route(context.Background(), "chat1", "user1", "overflow message")
+
+	msgs := sender.Messages()
+	hasQueueFull := false
+	for _, m := range msgs {
+		if strings.Contains(m, "Queue is full") {
+			hasQueueFull = true
+		}
+	}
+	if !hasQueueFull {
+		t.Fatalf("expected 'Queue is full' message, got: %v", msgs)
+	}
+
+	close(done)
+	q.Shutdown()
+}
+
+func TestRouterStatus_WithQueue(t *testing.T) {
+	// Verify cmdStatus covers the r.queue != nil branch.
+	r, sender, q := newTestRouterForExec(t)
+	r.Route(context.Background(), "chat1", "user1", "/status")
+	q.Shutdown()
+
+	found := false
+	for _, m := range sender.Messages() {
+		if strings.Contains(m, "Queued:") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'Queued:' field in status, got: %v", sender.Messages())
+	}
+}
+
+func TestRouterCd_SavesDirSession(t *testing.T) {
+	// When the session has an existing ClaudeSessionID and WorkDir, /cd should
+	// save the current dir-session before switching.
+	r, sender := newTestRouter(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.ClaudeSessionID = "existing-session-id"
+	})
+
+	r.Route(context.Background(), "chat1", "user1", "/cd project1")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Changed to") {
+		t.Fatalf("expected changed to message, got: %q", msg)
+	}
+}
+
+func TestRouterFile_AbsolutePath(t *testing.T) {
+	// Absolute paths should be rejected by findFile and return "not found".
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/file /absolute/path.txt")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "not found") {
+		t.Fatalf("expected not found for absolute path, got: %q", msg)
+	}
+}
+
+func TestRouterRouteImage_WriteFileError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	r, sender := newTestRouter(t)
+	session := r.getSession("chat1")
+
+	// Pre-create .devbot-images dir and make it non-writable.
+	imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+	os.MkdirAll(imgDir, 0755)
+	os.Chmod(imgDir, 0555)
+	defer os.Chmod(imgDir, 0755)
+
+	r.RouteImage(context.Background(), "chat1", "user1", []byte("data"), "test.png")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Failed to save image") {
+		t.Fatalf("expected save image error, got: %q", msg)
+	}
+}
+
+func TestRouterRouteTextWithImages_MkdirError(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+	session := r.getSession("chat1")
+
+	// Make WorkDir a file so MkdirAll for .devbot-images fails.
+	fakeDirPath := filepath.Join(session.WorkDir, "notadir2")
+	os.WriteFile(fakeDirPath, []byte("file content"), 0644)
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.WorkDir = fakeDirPath
+	})
+
+	images := []ImageAttachment{{Data: []byte("data"), FileName: "photo.jpg"}}
+	r.RouteTextWithImages(context.Background(), "chat1", "user1", "check this", images)
+	q.Shutdown()
+
+	found := false
+	for _, m := range sender.Messages() {
+		if strings.Contains(m, "Failed to create image directory") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'Failed to create image directory' message, got: %v", sender.Messages())
+	}
+}
+
+func TestRouterRouteTextWithImages_TextFallback(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	r, _, q := newTestRouterForExec(t)
+	session := r.getSession("chat1")
+
+	// Make imgDir non-writable so all image saves fail.
+	imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+	os.MkdirAll(imgDir, 0755)
+	os.Chmod(imgDir, 0555)
+	defer os.Chmod(imgDir, 0755)
+
+	images := []ImageAttachment{{Data: []byte("data"), FileName: "photo.jpg"}}
+	// Non-empty text with failing images → text-only prompt fallback.
+	r.RouteTextWithImages(context.Background(), "chat1", "user1", "check this bug", images)
+	q.Shutdown()
+	// No panic — text fallback branch covered.
 }
 
 func TestRouterEmptyText(t *testing.T) {

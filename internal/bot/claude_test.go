@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -311,6 +312,87 @@ echo '{"type":"result","result":"","session_id":"s1","permission_denials":[{"too
 	}
 }
 
+func TestExtractAssistantText_Nil(t *testing.T) {
+	result := extractAssistantText(nil)
+	if result != "" {
+		t.Fatalf("expected empty string for nil message, got %q", result)
+	}
+}
+
+func TestExtractAssistantText_InvalidJSON(t *testing.T) {
+	result := extractAssistantText([]byte("{not valid json"))
+	if result != "" {
+		t.Fatalf("expected empty string for invalid JSON, got %q", result)
+	}
+}
+
+func TestExtractAssistantText_NonTextContent(t *testing.T) {
+	// Content with only non-text types should return empty string
+	msg := []byte(`{"content":[{"type":"tool_use","id":"t1"},{"type":"text","text":"hello"}]}`)
+	result := extractAssistantText(msg)
+	if result != "hello" {
+		t.Fatalf("expected 'hello', got %q", result)
+	}
+}
+
+func TestClaudeExec_ErrorEmptyResult(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// is_error=true but result is empty → should use "unknown error"
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"","is_error":true,"session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "unknown error") {
+		t.Fatalf("expected 'unknown error', got: %v", err)
+	}
+}
+
+func TestClaudeExecStream_ErrorWithStderr(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// Writes to stderr and outputs an error result
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "something went wrong" >&2
+echo '{"type":"result","result":"exec failed","is_error":true,"session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "exec failed") {
+		t.Fatalf("expected 'exec failed' in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "something went wrong") {
+		t.Fatalf("expected stderr in error, got: %v", err)
+	}
+}
+
+func TestClaudeExecStream_NoResult(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// Script outputs something but never a result event → "no result event" error
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"system","subtype":"init"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected error for no result event")
+	}
+	if !strings.Contains(err.Error(), "no result event") {
+		t.Fatalf("expected 'no result event' error, got: %v", err)
+	}
+}
+
 func TestClaudeExecStream_CountAndDuration(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
@@ -329,5 +411,169 @@ echo '{"type":"result","result":"ok","session_id":"s1"}'
 	}
 	if exec.LastExecDuration() <= 0 {
 		t.Fatalf("expected positive duration")
+	}
+}
+
+func TestClaudeExec_YoloMode(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\necho '{\"type\":\"result\",\"result\":\"ok\",\"session_id\":\"s1\"}'\n", argsFile)), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.Exec(context.Background(), "test", dir, "", "yolo", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	argsData, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(argsData), "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions in args, got: %q", string(argsData))
+	}
+}
+
+func TestClaudeExec_LargeOutput(t *testing.T) {
+	// Output >= 3000 chars triggers the truncated log path.
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	large := strings.Repeat("x", 3001)
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\nprintf '{\"type\":\"result\",\"result\":\"%s\",\"session_id\":\"s1\"}\\n' \n", large)), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	if len(result.Output) < 3000 {
+		t.Fatalf("expected large output, got len=%d", len(result.Output))
+	}
+}
+
+func TestClaudeExec_PermissionDenial(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"","session_id":"s1","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"ls"}}]}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.Exec(context.Background(), "test", dir, "", "safe", "sonnet")
+	if err != nil {
+		t.Fatalf("Exec error: %v", err)
+	}
+	if !result.IsPermissionDenial {
+		t.Fatalf("expected IsPermissionDenial=true")
+	}
+}
+
+func TestClaudeExecStream_YoloMode(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\necho '{\"type\":\"result\",\"result\":\"ok\",\"session_id\":\"s1\"}'\n", argsFile)), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "yolo", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	argsData, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(argsData), "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions in args, got: %q", string(argsData))
+	}
+}
+
+func TestClaudeExecStream_EmptyLines(t *testing.T) {
+	// Empty lines should be skipped without panic.
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo ""
+echo ""
+echo '{"type":"result","result":"ok","session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	if result.Output != "ok" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+}
+
+func TestClaudeExecStream_NonJSONLine(t *testing.T) {
+	// Non-JSON lines should be skipped (logged), not cause an error.
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "this is not json"
+echo '{"type":"result","result":"ok","session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	result, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("ExecStream error: %v", err)
+	}
+	if result.Output != "ok" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+}
+
+func TestClaudeExecStream_ErrorWithErrors(t *testing.T) {
+	// Error result with errors array (ev.Result="" but ev.Errors has items).
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"","is_error":true,"session_id":"s1","errors":["err1","err2"]}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "err1") || !strings.Contains(err.Error(), "err2") {
+		t.Fatalf("expected errors array in error message, got: %v", err)
+	}
+}
+
+func TestClaudeExecStream_ErrorEmpty(t *testing.T) {
+	// Error result with empty result and empty errors → "unknown error".
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"result","result":"","is_error":true,"session_id":"s1"}'
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "unknown error") {
+		t.Fatalf("expected 'unknown error', got: %v", err)
+	}
+}
+
+func TestFormatAskUserQuestion_InvalidJSON(t *testing.T) {
+	// Invalid JSON should return the raw input as a string.
+	input := json.RawMessage(`not valid json`)
+	result := formatAskUserQuestion(input)
+	if result != "not valid json" {
+		t.Fatalf("expected raw input returned for invalid JSON, got %q", result)
+	}
+}
+
+func TestClaudeExec_StartError(t *testing.T) {
+	// Nonexistent binary causes cmd.Start() to fail.
+	exec := NewClaudeExecutor("/nonexistent_binary_xyz_for_test", "sonnet", 30*time.Second)
+	_, err := exec.Exec(context.Background(), "test", t.TempDir(), "", "safe", "sonnet")
+	if err == nil {
+		t.Fatalf("expected error for nonexistent binary")
+	}
+	if !strings.Contains(err.Error(), "failed to start claude") {
+		t.Fatalf("expected 'failed to start claude' error, got: %v", err)
 	}
 }

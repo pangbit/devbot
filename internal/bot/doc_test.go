@@ -51,6 +51,26 @@ func TestParseDocID_Whitespace(t *testing.T) {
 	}
 }
 
+func TestParseDocID_FallbackLastSegment(t *testing.T) {
+	// Non-docx URL: should fall back to returning the last non-empty path segment.
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://feishu.cn/wiki/DOC123", "DOC123"},
+		{"https://feishu.cn/drive/home/FILEID", "FILEID"},
+		{"https://feishu.cn/wiki/DOC123/", "DOC123"},
+		// Root URL with no path segments — falls back to returning raw URL
+		{"https://feishu.cn/", "https://feishu.cn/"},
+	}
+	for _, tt := range tests {
+		got := ParseDocID(tt.input)
+		if got != tt.want {
+			t.Errorf("ParseDocID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 // --- Fake DocPusher for router tests ---
 
 type fakeDocPusher struct {
@@ -317,6 +337,17 @@ func TestDocUnbind(t *testing.T) {
 	}
 }
 
+func TestDocUnbind_NotFound(t *testing.T) {
+	fake := &fakeDocPusher{}
+	r, sender, _ := newTestRouterWithDoc(t, fake)
+
+	r.Route(context.Background(), "chat1", "user1", "/doc unbind nonexistent_binding.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "No binding found") {
+		t.Fatalf("expected 'No binding found' message, got: %q", msg)
+	}
+}
+
 func TestDocUnbind_NoArgs(t *testing.T) {
 	fake := &fakeDocPusher{}
 	r, sender, _ := newTestRouterWithDoc(t, fake)
@@ -441,6 +472,59 @@ func TestDocBind_FuzzyPath(t *testing.T) {
 	}
 }
 
+func TestDocPull_WriteFileError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	fake := &fakeDocPusher{pullContent: "new content"}
+	r, sender, dir := newTestRouterWithDoc(t, fake)
+
+	// Create a binding for a target file, then make it non-writable.
+	filePath := filepath.Join(dir, "README.md")
+	r.store.SetDocBinding(filePath, "doc_write_err")
+
+	// Remove write permission from the file itself so WriteFile fails.
+	os.Chmod(filePath, 0000)
+	defer os.Chmod(filePath, 0644)
+
+	r.Route(context.Background(), "chat1", "user1", "/doc pull README.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Error writing file") {
+		t.Fatalf("expected write error message, got: %q", msg)
+	}
+}
+
+func TestDocPull_OutsideRoot(t *testing.T) {
+	fake := &fakeDocPusher{}
+	r, sender, _ := newTestRouterWithDoc(t, fake)
+
+	// Create a binding that points outside the work root using a unique name so
+	// the fuzzy match in findDocBinding will find it.
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outsidefile_zzz.md")
+	os.WriteFile(outsidePath, []byte("outside content"), 0644)
+	r.store.SetDocBinding(outsidePath, "doc_outside")
+
+	// Query by filename — fuzzy match finds it, but underRoot check rejects it.
+	r.Route(context.Background(), "chat1", "user1", "/doc pull outsidefile_zzz.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Cannot access files outside work root") {
+		t.Fatalf("expected outside work root rejection, got: %q", msg)
+	}
+}
+
+func TestDocPush_AbsolutePath(t *testing.T) {
+	// Absolute paths should be rejected because resolveFilePath returns "" for them.
+	fake := &fakeDocPusher{}
+	r, sender, _ := newTestRouterWithDoc(t, fake)
+
+	r.Route(context.Background(), "chat1", "user1", "/doc push /absolute/path/file.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "not found") && !strings.Contains(msg, "Error") {
+		t.Fatalf("expected error for absolute path, got: %q", msg)
+	}
+}
+
 func TestDocPull_FuzzyBinding(t *testing.T) {
 	fake := &fakeDocPusher{
 		pullContent: "pulled content",
@@ -466,6 +550,72 @@ func TestDocPull_FuzzyBinding(t *testing.T) {
 	}
 	if string(data) != "pulled content" {
 		t.Fatalf("expected 'pulled content', got %q", string(data))
+	}
+}
+
+func TestDocPull_NotConfigured(t *testing.T) {
+	// /doc pull with nil DocPusher should report "not configured".
+	r, sender, _ := newTestRouterWithDoc(t, nil)
+	r.Route(context.Background(), "chat1", "user1", "/doc pull test.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "not configured") {
+		t.Fatalf("expected 'not configured' message, got: %q", msg)
+	}
+}
+
+func TestDocPush_OutsideRoot(t *testing.T) {
+	fake := &fakeDocPusher{}
+	r, sender, _ := newTestRouterWithDoc(t, fake)
+
+	// Create the session first, then point WorkDir outside the work root.
+	r.getSession("chat1")
+	outsideDir := t.TempDir()
+	os.WriteFile(filepath.Join(outsideDir, "outside.md"), []byte("content"), 0644)
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.WorkDir = outsideDir
+	})
+
+	r.Route(context.Background(), "chat1", "user1", "/doc push outside.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Cannot access files outside work root") {
+		t.Fatalf("expected outside root rejection, got: %q", msg)
+	}
+}
+
+func TestDocPush_ReadError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	fake := &fakeDocPusher{}
+	r, sender, dir := newTestRouterWithDoc(t, fake)
+
+	filePath := filepath.Join(dir, "secret.md")
+	os.WriteFile(filePath, []byte("secret content"), 0644)
+	os.Chmod(filePath, 0000)
+	defer os.Chmod(filePath, 0644)
+
+	r.Route(context.Background(), "chat1", "user1", "/doc push secret.md")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Error reading file") {
+		t.Fatalf("expected read error message, got: %q", msg)
+	}
+}
+
+func TestDocBind_OutsideRoot(t *testing.T) {
+	fake := &fakeDocPusher{}
+	r, sender, _ := newTestRouterWithDoc(t, fake)
+
+	// Create the session first, then point WorkDir outside the work root.
+	r.getSession("chat1")
+	outsideDir := t.TempDir()
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.WorkDir = outsideDir
+	})
+
+	r.Route(context.Background(), "chat1", "user1", "/doc bind file.md DOCID123")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "Cannot access files outside work root") {
+		t.Fatalf("expected outside root rejection, got: %q", msg)
 	}
 }
 

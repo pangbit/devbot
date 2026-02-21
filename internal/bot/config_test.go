@@ -233,3 +233,15 @@ func TestLoadConfigFromMissingFile(t *testing.T) {
 		t.Fatalf("expected error for missing config file")
 	}
 }
+
+func TestLoadConfigFromInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	// Write YAML with a syntax error (tab indentation is forbidden in YAML).
+	os.WriteFile(configPath, []byte("{{{not valid yaml"), 0644)
+
+	_, err := LoadConfigFrom(configPath)
+	if err == nil {
+		t.Fatalf("expected error for invalid YAML")
+	}
+}

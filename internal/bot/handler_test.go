@@ -63,6 +63,22 @@ func (f *fakeRouter) RouteTextWithImages(_ context.Context, chatID, userID, text
 	f.images = images
 }
 
+// errReadCloser is an io.ReadCloser whose Read always fails.
+type errReadCloser struct{}
+
+func (e *errReadCloser) Read(p []byte) (int, error) { return 0, errors.New("read error") }
+func (e *errReadCloser) Close() error               { return nil }
+
+// errReadDownloader always returns a reader that fails on Read.
+type errReadDownloader struct{}
+
+func (e *errReadDownloader) DownloadImage(_ context.Context, _, _ string) (io.ReadCloser, error) {
+	return &errReadCloser{}, nil
+}
+func (e *errReadDownloader) DownloadFile(_ context.Context, _, _ string) (io.ReadCloser, string, error) {
+	return &errReadCloser{}, "", nil
+}
+
 type fakeDownloader struct {
 	imageData []byte
 	imageErr  error
@@ -394,6 +410,116 @@ func TestHandleMessage_FileNoDownloader(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_ImageInvalidContent(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`not valid json {{{`, "msg_050", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for invalid image content")
+	}
+}
+
+func TestHandleMessage_ImageEmptyKey(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":""}`, "msg_051", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for empty image key")
+	}
+}
+
+func TestHandleMessage_ImageDownloadError_NoSender(t *testing.T) {
+	// When download fails and h.sender is nil, should not panic.
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":"img_abc"}`, "msg_052", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageErr: errors.New("network error")}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil) // sender = nil
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called when download fails")
+	}
+}
+
+func TestHandleMessage_FileInvalidContent(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "file",
+		`not valid json {{{`, "msg_053", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for invalid file content")
+	}
+}
+
+func TestHandleMessage_FileEmptyKey(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "file",
+		`{"file_key":"","file_name":"test.txt"}`, "msg_054", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for empty file key")
+	}
+}
+
+func TestHandleMessage_InteractiveWithDocURL(t *testing.T) {
+	evt := map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{"event_type": "im.message.receive_v1"},
+		"event": map[string]interface{}{
+			"sender": map[string]interface{}{
+				"sender_type": "user",
+				"sender_id":   map[string]interface{}{"open_id": "user1"},
+			},
+			"message": map[string]interface{}{
+				"chat_id":      "oc_chat",
+				"chat_type":    "p2p",
+				"message_type": "interactive",
+				"content":      `{"url":"https://abc.feishu.cn/docx/INTERACT456"}`,
+			},
+		},
+	}
+	data, _ := json.Marshal(evt)
+	var parsed larkim.P2MessageReceiveV1
+	json.Unmarshal(data, &parsed)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &parsed)
+
+	if !router.called {
+		t.Fatalf("expected RouteDocShare called for interactive with doc URL")
+	}
+	if router.docID != "INTERACT456" {
+		t.Fatalf("expected docID 'INTERACT456', got %q", router.docID)
+	}
+}
+
 func TestHandleMessage_DocURLInText(t *testing.T) {
 	raw := makeEvent("user", "user1", "oc_chat", "p2p", "text",
 		`{"text":"https://abc.feishu.cn/docx/DOC123abc"}`, nil)
@@ -678,6 +804,100 @@ func TestHandleMessage_PostWithImageNoDownloader(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_PostImageDownloadError(t *testing.T) {
+	// When a post message has an image but the downloader fails, the image is
+	// silently skipped and the text is still routed.
+	postContent := `{"content":[[{"tag":"text","text":"fix this"},{"tag":"img","image_key":"img_bad"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_020", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageErr: errors.New("network error")}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	// Text should still be routed even though image download failed
+	if !router.called {
+		t.Fatalf("expected router to be called with text even when image download fails")
+	}
+	if router.text != "fix this" {
+		t.Fatalf("expected text 'fix this', got %q", router.text)
+	}
+	// No images should have been attached
+	if len(router.images) != 0 {
+		t.Fatalf("expected no images (download failed), got %d", len(router.images))
+	}
+}
+
+func TestHandleMessage_PostImageTooLarge(t *testing.T) {
+	// When a post message has an oversized image, it is silently skipped.
+	postContent := `{"content":[[{"tag":"text","text":"check this"},{"tag":"img","image_key":"img_huge"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_021", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	largeData := make([]byte, maxImageSize+1)
+	dl := &fakeDownloader{imageData: largeData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	// Text should still be routed even though the image was too large
+	if !router.called {
+		t.Fatalf("expected router to be called with text even when image is too large")
+	}
+	if router.text != "check this" {
+		t.Fatalf("expected text 'check this', got %q", router.text)
+	}
+	// No images should have been attached
+	if len(router.images) != 0 {
+		t.Fatalf("expected no images (too large), got %d", len(router.images))
+	}
+}
+
+func TestHandleMessage_ImageReadError(t *testing.T) {
+	// DownloadImage succeeds but the reader returns an error during Read.
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":"img_err"}`, "msg_030", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &errReadDownloader{}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	// ReadAll error → silently skipped, router not called
+	if router.called {
+		t.Fatalf("expected router not called when read fails")
+	}
+}
+
+func TestHandleMessage_PostImageReadError(t *testing.T) {
+	// DownloadImage succeeds but Read fails (post image context).
+	postContent := `{"content":[[{"tag":"text","text":"fix this"},{"tag":"img","image_key":"img_err2"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_041", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &errReadDownloader{}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	// Text still routed; image silently dropped
+	if !router.called {
+		t.Fatalf("expected router to be called with text even when image read fails")
+	}
+	if router.text != "fix this" {
+		t.Fatalf("expected text 'fix this', got %q", router.text)
+	}
+	if len(router.images) != 0 {
+		t.Fatalf("expected no images (read failed), got %d", len(router.images))
+	}
+}
+
 func TestHandleMessage_PostWithTitle(t *testing.T) {
 	postContent := `{"title":"Bug Report","content":[[{"tag":"text","text":"details here"}]]}`
 	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
@@ -693,6 +913,217 @@ func TestHandleMessage_PostWithTitle(t *testing.T) {
 	}
 	if router.text != "Bug Report\ndetails here" {
 		t.Fatalf("expected title+text, got %q", router.text)
+	}
+}
+
+func TestHandleMessage_TextEmpty(t *testing.T) {
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "text", `{"text":""}`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for empty text")
+	}
+}
+
+func TestHandleMessage_TextInvalidContent(t *testing.T) {
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "text", `not valid json`, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for invalid text content JSON")
+	}
+}
+
+func TestHandleMessage_ImageGIF(t *testing.T) {
+	// GIF89a magic bytes
+	gifData := append([]byte("GIF89a"), make([]byte, 20)...)
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":"img_gif"}`, "msg_gif", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageData: gifData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for GIF image")
+	}
+	if router.imageName != "img_gif.gif" {
+		t.Fatalf("expected .gif extension, got %q", router.imageName)
+	}
+}
+
+func TestHandleMessage_ImageWEBP(t *testing.T) {
+	// WEBP magic: RIFF + 4 bytes (any) + WEBP + VP (chunk type prefix)
+	webpData := []byte{'R', 'I', 'F', 'F', 0x10, 0x20, 0x30, 0x40, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '}
+	webpData = append(webpData, make([]byte, 20)...)
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":"img_webp"}`, "msg_webp", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageData: webpData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for WEBP image")
+	}
+	if router.imageName != "img_webp.webp" {
+		t.Fatalf("expected .webp extension, got %q", router.imageName)
+	}
+}
+
+func TestHandleMessage_FileReadError(t *testing.T) {
+	// DownloadFile succeeds but Read fails — router should not be called.
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "file",
+		`{"file_key":"file_xyz","file_name":"report.pdf"}`, "msg_read_err", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &errReadDownloader{}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called when file read fails")
+	}
+}
+
+func TestHandleMessage_PostLinkTag(t *testing.T) {
+	// Post with an "a" (hyperlink) tag — text should be collected and routed.
+	postContent := `{"content":[[{"tag":"a","href":"https://example.com","text":"Click here"}]]}`
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called with link text")
+	}
+	if router.text != "Click here" {
+		t.Fatalf("expected 'Click here', got %q", router.text)
+	}
+}
+
+func TestHandleMessage_PostNoResult(t *testing.T) {
+	// Post with only whitespace text and no images — should not call router.
+	postContent := `{"content":[[{"tag":"text","text":"   "}]]}`
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", postContent, nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called when post has no meaningful content")
+	}
+}
+
+func TestHandleMessage_PostImageJPEG(t *testing.T) {
+	// JPEG magic bytes — downloadPostImageData should produce .jpg extension.
+	jpegData := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01}
+	postContent := `{"content":[[{"tag":"img","image_key":"img_jpeg"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_jpeg", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageData: jpegData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for JPEG post image")
+	}
+	if len(router.images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(router.images))
+	}
+	if !strings.HasSuffix(router.images[0].FileName, ".jpg") {
+		t.Fatalf("expected .jpg extension, got %q", router.images[0].FileName)
+	}
+}
+
+func TestHandleMessage_PostImageGIF(t *testing.T) {
+	// GIF in post — downloadPostImageData should produce .gif extension.
+	gifData := append([]byte("GIF89a"), make([]byte, 20)...)
+	postContent := `{"content":[[{"tag":"img","image_key":"img_pgif"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_pgif", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageData: gifData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for GIF post image")
+	}
+	if len(router.images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(router.images))
+	}
+	if !strings.HasSuffix(router.images[0].FileName, ".gif") {
+		t.Fatalf("expected .gif extension, got %q", router.images[0].FileName)
+	}
+}
+
+func TestHandleMessage_PostInvalidJSON(t *testing.T) {
+	// Invalid JSON in post content — handlePost should return early without calling router.
+	raw := makeEvent("user", "user1", "oc_chat", "p2p", "post", "not valid json", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	router := &fakeRouter{}
+	h := NewHandler(router, nil, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called when post content is invalid JSON")
+	}
+}
+
+func TestHandleMessage_PostImageWEBP(t *testing.T) {
+	// WEBP in post — downloadPostImageData should produce .webp extension.
+	webpData := []byte{'R', 'I', 'F', 'F', 0x10, 0x20, 0x30, 0x40, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '}
+	webpData = append(webpData, make([]byte, 20)...)
+	postContent := `{"content":[[{"tag":"img","image_key":"img_pwebp"}]]}`
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "post", postContent, "msg_pwebp", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	dl := &fakeDownloader{imageData: webpData}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, nil, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if !router.called {
+		t.Fatalf("expected router to be called for WEBP post image")
+	}
+	if len(router.images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(router.images))
+	}
+	if !strings.HasSuffix(router.images[0].FileName, ".webp") {
+		t.Fatalf("expected .webp extension, got %q", router.images[0].FileName)
 	}
 }
 

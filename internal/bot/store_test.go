@@ -128,6 +128,87 @@ func TestStoreCorruptJSON(t *testing.T) {
 	}
 }
 
+func TestStoreNewStore_ReadDirError(t *testing.T) {
+	// Passing a directory path (not a file) should trigger a non-IsNotExist read error.
+	dir := t.TempDir()
+	_, err := NewStore(dir) // dir itself is passed as the state file path
+	if err == nil {
+		t.Fatalf("expected error when path is a directory")
+	}
+}
+
+func TestStoreSave_WriteError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root; permission-based tests are unreliable")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore error: %v", err)
+	}
+	s.SetWorkRoot("/test")
+
+	// Make the parent directory non-writable so WriteFile fails.
+	os.Chmod(dir, 0555)
+	defer os.Chmod(dir, 0755)
+
+	if err := s.Save(); err == nil {
+		t.Fatalf("expected error when directory is not writable")
+	}
+}
+
+func TestStoreSave_MkdirError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore error: %v", err)
+	}
+	s.SetWorkRoot("/test")
+
+	// Redirect path to a location where the parent dir cannot be created.
+	// On macOS/Linux, creating directories under "/" requires root.
+	s.path = "/nonexistent_root_xyz_test/subdir/state.json"
+	if err := s.Save(); err == nil {
+		t.Fatalf("expected error when parent dir cannot be created")
+	}
+}
+
+func TestNewStore_ExistingFileNilMaps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	// Write valid JSON with null maps — json.Unmarshal sets map fields to nil,
+	// triggering the re-initialization branches in NewStore.
+	os.WriteFile(path, []byte(`{"chats":null,"docBindings":null,"workRoot":"/some/path"}`), 0644)
+
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.state.Chats == nil {
+		t.Fatalf("expected Chats to be initialized to non-nil map")
+	}
+	if s.state.DocBindings == nil {
+		t.Fatalf("expected DocBindings to be initialized to non-nil map")
+	}
+}
+
+func TestStoreSessionExecParams_NoSession(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("NewStore error: %v", err)
+	}
+
+	workDir, sessionID, permMode, model := s.SessionExecParams("nonexistent_chat")
+	if workDir != "" || sessionID != "" || permMode != "" || model != "" {
+		t.Fatalf("expected empty params for nonexistent session, got: %q %q %q %q",
+			workDir, sessionID, permMode, model)
+	}
+}
+
 func TestStoreDocBindings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
