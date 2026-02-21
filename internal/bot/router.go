@@ -129,6 +129,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdStash(ctx, chatID, args)
 	case "/log":
 		r.cmdLog(ctx, chatID, args)
+	case "/show":
+		r.cmdShow(ctx, chatID, args)
 	case "/branch":
 		r.cmdBranch(ctx, chatID, args)
 	case "/cancel":
@@ -199,6 +201,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"**🔧 Git:**\n" +
 		"`/diff`  查看当前变更\n" +
 		"`/log [n]`  查看提交历史（默认最近 20 条）\n" +
+		"`/show [commit]`  查看提交详情（默认最新提交 HEAD）\n" +
 		"`/branch [name]`  查看分支列表或切换/创建分支\n" +
 		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
 		"`/pull [args]`  从远程拉取（即时响应）\n" +
@@ -795,6 +798,36 @@ func (r *Router) cmdDiff(ctx context.Context, chatID string) {
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: "git diff", Content: combined})
 }
 
+func (r *Router) cmdShow(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	ref := "HEAD"
+	if args != "" {
+		ref = args
+	}
+	output, err := runGitOutput(workDir, "show", "--stat", ref)
+	if err != nil || output == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("找不到提交: %s", ref))
+		return
+	}
+	// Also get the diff (up to 3000 chars)
+	diff, _ := runGitOutput(workDir, "show", ref)
+	combined := output
+	if diff != "" && diff != output {
+		// show --stat output is a prefix of show, so just use full show
+		combined = diff
+	}
+	const maxOut = 4000
+	if runes := []rune(combined); len(runes) > maxOut {
+		combined = "（内容过长，仅显示开头部分）\n\n" + string(runes[:maxOut])
+	}
+	title := fmt.Sprintf("git show %s", ref)
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + combined + "\n```"})
+}
+
 func (r *Router) cmdBranch(ctx context.Context, chatID, args string) {
 	session := r.getSession(chatID)
 	workDir := session.WorkDir
@@ -1244,7 +1277,7 @@ var knownCommands = []string{
 	"/pwd", "/ls", "/root", "/cd",
 	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
 	"/last", "/summary", "/model", "/yolo", "/safe",
-	"/git", "/diff", "/log", "/branch", "/commit", "/pull", "/push", "/pr",
+	"/git", "/diff", "/log", "/show", "/branch", "/commit", "/pull", "/push", "/pr",
 	"/undo", "/stash",
 	"/grep", "/find", "/test", "/todo", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",

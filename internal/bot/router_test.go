@@ -2888,6 +2888,58 @@ func TestRouterLog_ErrorWithOutput(t *testing.T) {
 	}
 }
 
+// --- /show tests ---
+
+func TestRouterShow_NoArgs_InGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add a.go").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/show")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /show HEAD")
+	}
+	if !strings.Contains(sender.cards[0].Content, "a.go") {
+		t.Fatalf("expected 'a.go' in /show output, got: %q", sender.cards[0].Content[:min(200, len(sender.cards[0].Content))])
+	}
+}
+
+func TestRouterShow_InvalidCommit(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/show nonexistent123")
+
+	if !strings.Contains(sender.LastMessage(), "找不到提交") {
+		t.Fatalf("expected 'not found' message, got: %q", sender.LastMessage())
+	}
+}
+
+func TestRouterShow_NoGitRepo(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/show")
+
+	if sender.LastMessage() == "" {
+		t.Fatal("expected some message from /show in non-git dir")
+	}
+}
+
 func TestRouterDiff_LargeOutput(t *testing.T) {
 	// Create a git repo with a very large diff (>4000 chars) to test truncation
 	dir := t.TempDir()
@@ -3147,6 +3199,41 @@ func TestRouterPull_Success(t *testing.T) {
 
 	if len(sender.cards) == 0 {
 		t.Fatal("expected a card from /pull")
+	}
+}
+
+func TestRouterPull_WithArgs(t *testing.T) {
+	// /pull --dry-run should pass args to git pull
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/pull --dry-run")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /pull --dry-run")
+	}
+}
+
+func TestRouterPull_DefaultWorkDir(t *testing.T) {
+	// /pull with empty session WorkDir falls back to work root
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/pull")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /pull with empty workDir")
 	}
 }
 
