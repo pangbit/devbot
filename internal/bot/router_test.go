@@ -1494,8 +1494,8 @@ func TestRouterExecClaudeQueued_ShowsQueuePosition(t *testing.T) {
 	q.Enqueue("chat1", func() {
 		<-done
 	})
-	// This should be queued behind the blocking task
-	r.Route(context.Background(), "chat1", "user1", "/git log")
+	// This should be queued behind the blocking task (use a Claude-based command)
+	r.Route(context.Background(), "chat1", "user1", "/sh ls")
 	msgs := sender.Messages()
 	hasQueued := false
 	for _, m := range msgs {
@@ -2079,18 +2079,52 @@ func TestRouterLog_WithCount(t *testing.T) {
 
 // --- /branch with name arg ---
 
-func TestRouterBranch_WithName(t *testing.T) {
-	r, sender := newTestRouter(t)
+func TestRouterBranch_WithName_InGitRepo(t *testing.T) {
+	// /branch <name> in a real git repo creates or switches to the branch
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	// Need an initial commit so branch operations work
+	os.WriteFile(filepath.Join(dir, "README"), []byte("hi"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
 	r.Route(context.Background(), "chat1", "user1", "/branch feature/new")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
+
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "✓") {
+		t.Fatalf("expected success message for /branch <name>, got: %q", msg)
 	}
-	if !hasExecuting {
-		t.Fatalf("expected /branch <name> to trigger execution, got: %v", msgs)
+}
+
+func TestRouterBranch_SwitchExisting(t *testing.T) {
+	// /branch <name> when branch already exists should switch to it
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "README"), []byte("hi"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	exec.Command("git", "-C", dir, "checkout", "-b", "existing-branch").Run()
+	exec.Command("git", "-C", dir, "checkout", "-").Run() // back to original
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/branch existing-branch")
+
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "✓") {
+		t.Fatalf("expected success switch message, got: %q", msg)
 	}
 }
 
@@ -3094,9 +3128,11 @@ func TestRouterRecent_DefaultWorkDir(t *testing.T) {
 }
 
 func TestRouterRecent_EmptyCommits(t *testing.T) {
-	// If all commits are empty (no file changes), files list should be empty
+	// If all commits are empty (no file changes), files list should be empty → "没有找到" message
 	dir := t.TempDir()
 	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
 	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "empty commit 1").Run()
 	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "empty commit 2").Run()
 
@@ -3107,8 +3143,13 @@ func TestRouterRecent_EmptyCommits(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/recent")
 
-	if sender.LastMessage() == "" {
+	msg := sender.LastMessage()
+	if msg == "" {
 		t.Fatal("expected some message from /recent with empty commits")
+	}
+	// Git log returns output but no file names → "没有找到最近修改的文件"
+	if !strings.Contains(msg, "没有找到") && !strings.Contains(msg, "暂无提交") {
+		t.Fatalf("expected no-files message, got: %q", msg)
 	}
 }
 
@@ -3919,5 +3960,74 @@ func TestRouterClean_DefaultWorkDir(t *testing.T) {
 	}
 	if sender.cards[0].Template != "orange" {
 		t.Fatalf("expected orange card, got: %q", sender.cards[0].Template)
+	}
+}
+
+// --- /git tests ---
+
+func TestRouterGit_NoArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/git")
+	if !strings.Contains(sender.LastMessage(), "用法") {
+		t.Fatalf("expected usage message, got: %q", sender.LastMessage())
+	}
+}
+
+func TestRouterGit_Status(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/git status")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /git status")
+	}
+	if sender.cards[0].Template == "red" {
+		t.Fatalf("expected success card, got error: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterGit_InvalidCommand(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/git not-a-real-git-command")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected an error card for invalid git command")
+	}
+	if sender.cards[0].Template != "red" {
+		t.Fatalf("expected red error card, got: %q", sender.cards[0].Template)
+	}
+}
+
+func TestRouterGit_DefaultWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Route once to create session, then clear WorkDir
+	r.Route(context.Background(), "chat1", "user1", "/ping")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+	sender.cards = nil
+
+	r.Route(context.Background(), "chat1", "user1", "/git status")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card via WorkRoot fallback")
 	}
 }

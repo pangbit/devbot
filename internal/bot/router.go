@@ -218,7 +218,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/clean [-f]`  查看/清理未跟踪文件（默认预览，加 -f 确认删除）\n" +
-		"`/git <args>`  执行任意 git 命令\n\n" +
+		"`/git <args>`  执行任意 git 命令（即时响应）\n\n" +
 		"**📁 文件与搜索:**\n" +
 		"`/grep <pattern>`  在代码中搜索关键词（内容搜索）\n" +
 		"`/find <name>`  按文件名查找文件（支持通配符，如 *.go）\n" +
@@ -672,9 +672,32 @@ func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
 }
 
 func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
-	r.getSession(chatID) // ensure session exists
-	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "用法: /git <命令>\n示例: /git status\n示例: /git log --oneline -5")
+		return
+	}
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	gitArgs := strings.Fields(args)
+	output, err := runGitOutput(workDir, gitArgs...)
+	tpl := "blue"
+	title := fmt.Sprintf("git %s", gitArgs[0])
+	if err != nil {
+		tpl = "red"
+		title += " 出错"
+	}
+	content := output
+	if content == "" {
+		content = "（无输出）"
+	}
+	const maxOut = 6000
+	if runes := []rune(content); len(runes) > maxOut {
+		content = fmt.Sprintf("（内容过长，仅显示前 %d 字符）\n\n", maxOut) + string(runes[:maxOut])
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + content + "\n```", Template: tpl})
 }
 
 func (r *Router) cmdFetch(ctx context.Context, chatID, args string) {
@@ -951,9 +974,26 @@ func (r *Router) cmdBranch(ctx context.Context, chatID, args string) {
 		r.sender.SendCard(ctx, chatID, CardMsg{Title: "分支列表", Content: "```\n" + output + "\n```"})
 		return
 	}
-	// Create new branch or switch to existing — keep Claude for smart error handling
-	prompt := fmt.Sprintf("Run `git checkout -b %s 2>/dev/null || git checkout %s` in the current directory and return the output. Only show the command output, no explanation.", args, args)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	// Try to create new branch; if it already exists, switch to it
+	out, err := runGitOutput(workDir, "checkout", "-b", args)
+	if err != nil {
+		// Branch likely already exists — try switching
+		out, err = runGitOutput(workDir, "checkout", args)
+	}
+	if err != nil {
+		r.sender.SendCard(ctx, chatID, CardMsg{
+			Title:    fmt.Sprintf("git checkout 出错: %s", args),
+			Content:  out,
+			Template: "red",
+		})
+		return
+	}
+	branch := gitBranch(workDir)
+	msg := fmt.Sprintf("✓ 已切换到分支: %s", args)
+	if branch != "" && branch != args {
+		msg = fmt.Sprintf("✓ 已切换到分支: %s（当前: %s）", args, branch)
+	}
+	r.sender.SendText(ctx, chatID, msg)
 }
 
 func (r *Router) cmdRetry(ctx context.Context, chatID string) {
