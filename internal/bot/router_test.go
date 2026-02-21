@@ -4261,3 +4261,70 @@ func TestRouterUndo_DefaultWorkDir(t *testing.T) {
 		t.Fatalf("expected no-changes message via WorkRoot fallback, got: %q", msg)
 	}
 }
+
+// --- /remote tests ---
+
+func TestRouterRemote_NoRemote(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/remote")
+
+	if !strings.Contains(sender.LastMessage(), "没有配置") {
+		t.Fatalf("expected 'no remote' message, got: %q", sender.LastMessage())
+	}
+}
+
+func TestRouterRemote_NotGitRepo(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/remote")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /remote in non-git dir")
+	}
+}
+
+// --- /tag tests ---
+
+func TestRouterTag_NoTags(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tag")
+
+	if !strings.Contains(sender.LastMessage(), "没有标签") {
+		t.Fatalf("expected 'no tags' message, got: %q", sender.LastMessage())
+	}
+}
+
+func TestRouterTag_CreateTag(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "f.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tag v1.0.0")
+
+	if !strings.Contains(sender.LastMessage(), "✓") {
+		t.Fatalf("expected success message for /tag create, got: %q", sender.LastMessage())
+	}
+}

@@ -129,6 +129,10 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdUndo(ctx, chatID)
 	case "/clean":
 		r.cmdClean(ctx, chatID, args)
+	case "/remote":
+		r.cmdRemote(ctx, chatID, args)
+	case "/tag":
+		r.cmdTag(ctx, chatID, args)
 	case "/stash":
 		r.cmdStash(ctx, chatID, args)
 	case "/log":
@@ -224,6 +228,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/clean [-f]`  查看/清理未跟踪文件（默认预览，加 -f 确认删除）\n" +
+		"`/remote`  查看当前 git 远程仓库列表\n" +
+		"`/tag [name]`  查看标签列表，或创建新标签\n" +
 		"`/git <args>`  执行任意 git 命令（即时响应）\n\n" +
 		"**📁 文件与搜索:**\n" +
 		"`/grep <pattern>`  在代码中搜索关键词（内容搜索）\n" +
@@ -1557,6 +1563,60 @@ func (r *Router) cmdStats(ctx context.Context, chatID string) {
 	})
 }
 
+func (r *Router) cmdRemote(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	output, err := runGitOutput(workDir, "remote", "-v")
+	if err != nil || output == "" {
+		r.sender.SendText(ctx, chatID, "当前目录没有配置远程仓库，或不是 git 仓库。")
+		return
+	}
+	// De-duplicate lines (remote -v shows fetch/push for each)
+	seen := make(map[string]bool)
+	var lines []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		lines = append(lines, line)
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Git 远程仓库", Content: "```\n" + strings.Join(lines, "\n") + "\n```"})
+}
+
+func (r *Router) cmdTag(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	if args == "" {
+		// List tags
+		output, err := runGitOutput(workDir, "tag", "-l", "--sort=-version:refname")
+		if err != nil || output == "" {
+			r.sender.SendText(ctx, chatID, "当前仓库没有标签。")
+			return
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "Git 标签列表", Content: "```\n" + output + "\n```"})
+		return
+	}
+	// Create a lightweight tag
+	out, err := runGitOutput(workDir, "tag", args)
+	if err != nil {
+		r.sender.SendCard(ctx, chatID, CardMsg{
+			Title:    fmt.Sprintf("创建标签失败: %s", args),
+			Content:  out,
+			Template: "red",
+		})
+		return
+	}
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 标签已创建: %s", args))
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -1754,7 +1814,7 @@ var knownCommands = []string{
 	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
-	"/undo", "/stash", "/clean",
+	"/undo", "/stash", "/clean", "/remote", "/tag",
 	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/size", "/stats", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }
