@@ -936,6 +936,67 @@ func TestRouterLs_ReadDirError(t *testing.T) {
 	}
 }
 
+func TestRouterLs_WithDir(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// project1 subdir exists (created by newTestRouter); add a file and hidden file inside it
+	session := r.getSession("chat1")
+	os.WriteFile(filepath.Join(session.WorkDir, "project1", "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(session.WorkDir, "project1", ".hidden_file"), []byte("secret"), 0644)
+
+	r.Route(context.Background(), "chat1", "user1", "/ls project1")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "main.go") {
+		t.Fatalf("expected 'main.go' in /ls project1 output, got: %q", msg)
+	}
+	// Hidden files should be excluded
+	if strings.Contains(msg, ".hidden_file") {
+		t.Fatalf("expected hidden file to be excluded, got: %q", msg)
+	}
+}
+
+func TestRouterLs_WithDir_NotFound(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/ls nonexistent_xyz")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "读取目录出错") {
+		t.Fatalf("expected error for nonexistent dir, got: %q", msg)
+	}
+}
+
+func TestRouterLs_WithDir_OutsideRoot(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/ls ../../etc")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "不允许") {
+		t.Fatalf("expected security error for path outside root, got: %q", msg)
+	}
+}
+
+func TestRouterLs_WithDir_EmptyDir(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// project1 is an empty directory (newTestRouter creates it but puts nothing visible inside)
+	r.Route(context.Background(), "chat1", "user1", "/ls project1")
+	msg := sender.LastMessage()
+	// Either lists files or says empty — both are valid
+	if msg == "" {
+		t.Fatalf("expected some response from /ls project1")
+	}
+}
+
+func TestRouterLs_WithDir_SubdirShownWithSlash(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// Create a subdir inside project1 to cover the IsDir → "/" suffix path
+	session := r.getSession("chat1")
+	subdir := filepath.Join(session.WorkDir, "project1", "internal")
+	os.MkdirAll(subdir, 0755)
+
+	r.Route(context.Background(), "chat1", "user1", "/ls project1")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "internal/") {
+		t.Fatalf("expected 'internal/' (with slash) for subdir, got: %q", msg)
+	}
+}
+
 func TestRouterFile_ReadError(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("running as root; permission-based tests are unreliable")

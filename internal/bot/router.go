@@ -90,7 +90,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/pwd":
 		r.cmdPwd(ctx, chatID)
 	case "/ls":
-		r.cmdLs(ctx, chatID)
+		r.cmdLs(ctx, chatID, args)
 	case "/root":
 		r.cmdRoot(ctx, chatID, args)
 	case "/cd":
@@ -180,7 +180,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/root [path]`  查看/设置根工作目录\n" +
 		"`/cd <dir>`  切换项目目录（支持相对路径）\n" +
 		"`/pwd`  显示当前目录\n" +
-		"`/ls`  列出根目录下的项目\n\n" +
+		"`/ls [dir]`  列出根目录下的项目（或指定子目录的文件）\n\n" +
 		"**🤖 Claude 对话:**\n" +
 		"`/status`  查看详细状态（含 git 信息）\n" +
 		"`/new`  开启新对话（保留当前会话到历史）\n" +
@@ -295,7 +295,53 @@ func (r *Router) cmdPwd(ctx context.Context, chatID string) {
 	r.sender.SendText(ctx, chatID, session.WorkDir)
 }
 
-func (r *Router) cmdLs(ctx context.Context, chatID string) {
+func (r *Router) cmdLs(ctx context.Context, chatID, args string) {
+	if args != "" {
+		// /ls <dir>: list a specific directory relative to current workDir
+		session := r.getSession(chatID)
+		base := session.WorkDir
+		if base == "" {
+			base = r.store.WorkRoot()
+		}
+		target := filepath.Join(base, filepath.Clean(args))
+		// Security: must be under workRoot
+		if !underRoot(r.store.WorkRoot(), target) && target != r.store.WorkRoot() {
+			r.sender.SendText(ctx, chatID, fmt.Sprintf("不允许访问工作根目录之外的路径: %s", args))
+			return
+		}
+		entries, err := os.ReadDir(target)
+		if err != nil {
+			r.sender.SendText(ctx, chatID, fmt.Sprintf("读取目录出错: %v", err))
+			return
+		}
+		var lines []string
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			suffix := ""
+			if e.IsDir() {
+				suffix = "/"
+			}
+			info, _ := e.Info()
+			size := ""
+			if !e.IsDir() && info != nil {
+				size = fmt.Sprintf("  %d B", info.Size())
+			}
+			lines = append(lines, fmt.Sprintf("%s%s%s", e.Name(), suffix, size))
+		}
+		if len(lines) == 0 {
+			r.sender.SendText(ctx, chatID, fmt.Sprintf("目录为空: %s", target))
+			return
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{
+			Title:   fmt.Sprintf("目录: %s", filepath.Base(target)),
+			Content: strings.Join(lines, "\n"),
+		})
+		return
+	}
+
+	// /ls (no args): list project directories under work root
 	root := r.store.WorkRoot()
 	entries, err := os.ReadDir(root)
 	if err != nil {
