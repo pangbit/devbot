@@ -101,12 +101,12 @@ func TestRouterStatus_WithExec(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/status")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Execs:**    1") {
-		t.Fatalf("expected Execs: 1 after one execution, got: %q", msg)
+	if !strings.Contains(msg, "执行次数:** 1") {
+		t.Fatalf("expected 执行次数: 1 after one execution, got: %q", msg)
 	}
-	// LastExec should not be "-" after an execution
-	if strings.Contains(msg, "LastExec:** -") {
-		t.Fatalf("expected non-dash LastExec after execution, got: %q", msg)
+	// 上次耗时 should not be "-" after an execution
+	if strings.Contains(msg, "上次耗时:** -") {
+		t.Fatalf("expected non-dash 上次耗时 after execution, got: %q", msg)
 	}
 }
 
@@ -114,25 +114,25 @@ func TestRouterStatus(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/status")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Uptime") || !strings.Contains(msg, "sonnet") {
-		t.Fatalf("status should show Uptime and model, got: %q", msg)
+	if !strings.Contains(msg, "运行时长") || !strings.Contains(msg, "sonnet") {
+		t.Fatalf("status should show 运行时长 and model, got: %q", msg)
 	}
-	if !strings.Contains(msg, "Execs:") {
-		t.Fatalf("status should show Execs, got: %q", msg)
+	if !strings.Contains(msg, "执行次数") {
+		t.Fatalf("status should show 执行次数, got: %q", msg)
 	}
-	if !strings.Contains(msg, "LastExec:") {
-		t.Fatalf("status should show LastExec, got: %q", msg)
+	if !strings.Contains(msg, "上次耗时") {
+		t.Fatalf("status should show 上次耗时, got: %q", msg)
 	}
-	if !strings.Contains(msg, "Queued:") {
-		t.Fatalf("status should show Queued, got: %q", msg)
+	if !strings.Contains(msg, "待执行队列") {
+		t.Fatalf("status should show 待执行队列, got: %q", msg)
 	}
-	// With no executions, LastExec should be "-"
-	if !strings.Contains(msg, "LastExec:** -") {
-		t.Fatalf("status should show LastExec: - when no execs, got: %q", msg)
+	// With no executions, 上次耗时 should be "-"
+	if !strings.Contains(msg, "上次耗时:** -") {
+		t.Fatalf("status should show 上次耗时: - when no execs, got: %q", msg)
 	}
-	// Execs should be 0
-	if !strings.Contains(msg, "Execs:**    0") {
-		t.Fatalf("status should show Execs: 0, got: %q", msg)
+	// 执行次数 should be 0
+	if !strings.Contains(msg, "执行次数:** 0") {
+		t.Fatalf("status should show 执行次数: 0, got: %q", msg)
 	}
 }
 
@@ -161,7 +161,7 @@ func TestRouterCd(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/cd project1")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Changed to") || !strings.Contains(msg, "project1") {
+	if !strings.Contains(msg, "已切换到") || !strings.Contains(msg, "project1") {
 		t.Fatalf("expected cd confirmation, got: %q", msg)
 	}
 }
@@ -170,7 +170,7 @@ func TestRouterCdInvalid(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/cd nonexistent")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not found") {
+	if !strings.Contains(msg, "不存在") {
 		t.Fatalf("expected not found error, got: %q", msg)
 	}
 }
@@ -179,7 +179,7 @@ func TestRouterNewSession(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/new")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "New session") {
+	if !strings.Contains(msg, "新对话") {
 		t.Fatalf("expected new session msg, got: %q", msg)
 	}
 }
@@ -197,12 +197,12 @@ func TestRouterYoloSafe(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/yolo")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "YOLO") {
+	if !strings.Contains(msg, "无限制") {
 		t.Fatalf("expected yolo msg, got: %q", msg)
 	}
 	r.Route(context.Background(), "chat1", "user1", "/safe")
 	msg = sender.LastMessage()
-	if !strings.Contains(msg, "Safe") {
+	if !strings.Contains(msg, "安全模式") {
 		t.Fatalf("expected safe msg, got: %q", msg)
 	}
 }
@@ -220,7 +220,7 @@ func TestRouterKill_NoProcess(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/kill")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No running") {
+	if !strings.Contains(msg, "没有") {
 		t.Fatalf("expected no running task msg, got: %q", msg)
 	}
 }
@@ -229,7 +229,7 @@ func TestRouterUnknownCommand(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/unknown")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Unknown command") {
+	if !strings.Contains(msg, "未知命令") {
 		t.Fatalf("expected unknown command msg, got: %q", msg)
 	}
 }
@@ -277,7 +277,7 @@ func TestRouterCd_AbsPath(t *testing.T) {
 	subDir := filepath.Join(workRoot, "project1")
 	r.Route(context.Background(), "chat1", "user1", "/cd "+subDir)
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Changed to") {
+	if !strings.Contains(msg, "已切换到") {
 		t.Fatalf("expected changed to message, got: %q", msg)
 	}
 }
@@ -286,7 +286,7 @@ func TestRouterCdPathTraversal(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/cd ../../etc")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Cannot cd outside") {
+	if !strings.Contains(msg, "work root") {
 		t.Fatalf("expected path traversal rejection, got: %q", msg)
 	}
 }
@@ -359,8 +359,8 @@ func TestRouterRouteFileSavesAndSendsPrompt(t *testing.T) {
 	if len(sender.messages) == 0 {
 		t.Fatalf("expected at least one message")
 	}
-	if !strings.Contains(sender.messages[0], "File saved to:") {
-		t.Fatalf("expected 'File saved to:' message, got: %q", sender.messages[0])
+	if !strings.Contains(sender.messages[0], "文件已保存") {
+		t.Fatalf("expected '文件已保存' message, got: %q", sender.messages[0])
 	}
 
 	// Verify the file was actually written
@@ -604,7 +604,7 @@ func TestRouterRoot_ShowCurrent(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/root")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Current root:") {
+	if !strings.Contains(msg, "当前根目录") {
 		t.Fatalf("expected current root, got: %q", msg)
 	}
 }
@@ -617,7 +617,7 @@ func TestRouterRoot_SetValid(t *testing.T) {
 	}
 	r.Route(context.Background(), "chat1", "user1", "/root "+dir)
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Root set to:") {
+	if !strings.Contains(msg, "根目录已设置") {
 		t.Fatalf("expected root set confirmation, got: %q", msg)
 	}
 	if r.store.WorkRoot() != dir {
@@ -629,7 +629,7 @@ func TestRouterRoot_RejectRelative(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/root relative/path")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "absolute path") {
+	if !strings.Contains(msg, "绝对路径") {
 		t.Fatalf("expected absolute path error, got: %q", msg)
 	}
 }
@@ -639,7 +639,7 @@ func TestRouterRoot_RejectSystemDirs(t *testing.T) {
 	for _, d := range []string{"/", "/etc", "/var", "/usr", "/sys", "/proc"} {
 		r.Route(context.Background(), "chat1", "user1", "/root "+d)
 		msg := sender.LastMessage()
-		if !strings.Contains(msg, "system directory") {
+		if !strings.Contains(msg, "系统目录") {
 			t.Fatalf("expected system dir rejection for %s, got: %q", d, msg)
 		}
 	}
@@ -649,7 +649,7 @@ func TestRouterRoot_RejectNonExistent(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/root /nonexistent_path_xyz_abc")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "not found") {
+	if !strings.Contains(msg, "不存在") {
 		t.Fatalf("expected not found, got: %q", msg)
 	}
 }
@@ -666,7 +666,7 @@ func TestRouterRoot_RejectFile(t *testing.T) {
 	os.WriteFile(f, []byte("hi"), 0644)
 	r.Route(context.Background(), "chat1", "user1", "/root "+f)
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Not a directory") {
+	if !strings.Contains(msg, "不是目录") {
 		t.Fatalf("expected not a directory, got: %q", msg)
 	}
 }
@@ -677,7 +677,7 @@ func TestRouterSessions_Empty(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/sessions")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No sessions") {
+	if !strings.Contains(msg, "暂无历史会话") {
 		t.Fatalf("expected no sessions, got: %q", msg)
 	}
 }
@@ -694,7 +694,7 @@ func TestRouterSessions_WithHistory(t *testing.T) {
 	if !strings.Contains(msg, "old-sess-1") || !strings.Contains(msg, "old-sess-2") {
 		t.Fatalf("expected history, got: %q", msg)
 	}
-	if !strings.Contains(msg, "current-sess") || !strings.Contains(msg, "(current)") {
+	if !strings.Contains(msg, "current-sess") || !strings.Contains(msg, "当前") {
 		t.Fatalf("expected current session, got: %q", msg)
 	}
 }
@@ -705,7 +705,7 @@ func TestRouterSwitch_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/switch")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage:") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage, got: %q", msg)
 	}
 }
@@ -718,7 +718,7 @@ func TestRouterSwitch_Valid(t *testing.T) {
 	})
 	r.Route(context.Background(), "chat1", "user1", "/switch new-sess")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Switched to session: new-sess") {
+	if !strings.Contains(msg, "已切换到会话") || !strings.Contains(msg, "new-sess") {
 		t.Fatalf("expected switch confirmation, got: %q", msg)
 	}
 	sess := r.store.GetSession("chat1", "", "")
@@ -739,11 +739,20 @@ func TestRouterSwitch_Valid(t *testing.T) {
 // --- Usage message tests for commands that require args ---
 
 func TestRouterCommit_EmptyMsg(t *testing.T) {
+	// /commit without a message now auto-generates one via Claude (calls execClaudeQueued).
+	// Verify it sends "执行中" to indicate execution was triggered.
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/commit")
-	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage:") {
-		t.Fatalf("expected usage, got: %q", msg)
+	// Should start executing (not show usage error)
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected execution triggered for /commit without msg, got: %v", msgs)
 	}
 }
 
@@ -751,7 +760,7 @@ func TestRouterSh_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/sh")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage:") {
+	if !strings.Contains(msg, "用法") {
 		t.Fatalf("expected usage, got: %q", msg)
 	}
 }
@@ -769,7 +778,7 @@ func TestRouterModelShowCurrent(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/model")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Current model:") {
+	if !strings.Contains(msg, "当前模型") {
 		t.Fatalf("expected current model, got: %q", msg)
 	}
 	if !strings.Contains(msg, "sonnet") {
@@ -827,8 +836,8 @@ func TestRouterLs_Empty(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/ls")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "No projects found") {
-		t.Fatalf("expected 'No projects found' message, got: %q", msg)
+	if !strings.Contains(msg, "暂无项目") {
+		t.Fatalf("expected '暂无项目' message, got: %q", msg)
 	}
 }
 
@@ -909,12 +918,12 @@ func TestRouterKill_Running(t *testing.T) {
 	msgs := snd.Messages()
 	found := false
 	for _, m := range msgs {
-		if m == "Task killed." {
+		if strings.Contains(m, "已终止") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected 'Task killed.' message, got: %v", msgs)
+		t.Fatalf("expected '已终止' message, got: %v", msgs)
 	}
 }
 
@@ -944,12 +953,12 @@ func TestRouterExecClaudeQueued_QueueFull(t *testing.T) {
 	msgs := sender.Messages()
 	hasQueueFull := false
 	for _, m := range msgs {
-		if strings.Contains(m, "Queue is full") {
+		if strings.Contains(m, "队列已满") {
 			hasQueueFull = true
 		}
 	}
 	if !hasQueueFull {
-		t.Fatalf("expected 'Queue is full' message, got: %v", msgs)
+		t.Fatalf("expected '队列已满' message, got: %v", msgs)
 	}
 
 	close(done)
@@ -964,12 +973,12 @@ func TestRouterStatus_WithQueue(t *testing.T) {
 
 	found := false
 	for _, m := range sender.Messages() {
-		if strings.Contains(m, "Queued:") {
+		if strings.Contains(m, "待执行队列") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected 'Queued:' field in status, got: %v", sender.Messages())
+		t.Fatalf("expected '待执行队列' field in status, got: %v", sender.Messages())
 	}
 }
 
@@ -984,7 +993,7 @@ func TestRouterCd_SavesDirSession(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/cd project1")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Changed to") {
+	if !strings.Contains(msg, "已切换到") {
 		t.Fatalf("expected changed to message, got: %q", msg)
 	}
 }
@@ -1146,12 +1155,12 @@ func TestRouterExecClaude_NoQueue(t *testing.T) {
 	if len(sender.messages) < 2 {
 		t.Fatalf("expected at least 2 messages, got %d: %v", len(sender.messages), sender.messages)
 	}
-	if !strings.Contains(sender.messages[0], "Executing...") {
-		t.Fatalf("expected 'Executing...' text, got: %q", sender.messages[0])
+	if !strings.Contains(sender.messages[0], "执行中") {
+		t.Fatalf("expected '执行中' text, got: %q", sender.messages[0])
 	}
 	hasError := false
 	for _, m := range sender.messages {
-		if strings.Contains(m, "Error") {
+		if strings.Contains(m, "出错") {
 			hasError = true
 		}
 	}
@@ -1195,12 +1204,12 @@ func TestRouterExecClaudeQueued_ShowsQueuePosition(t *testing.T) {
 	msgs := sender.Messages()
 	hasQueued := false
 	for _, m := range msgs {
-		if strings.Contains(m, "Queued") {
+		if strings.Contains(m, "排队") {
 			hasQueued = true
 		}
 	}
 	if !hasQueued {
-		t.Fatalf("expected 'Queued' message, got: %v", msgs)
+		t.Fatalf("expected '排队' message, got: %v", msgs)
 	}
 	close(done)
 	q.Shutdown()
@@ -1316,22 +1325,22 @@ func TestRouterExecClaude_ResponseIsCard(t *testing.T) {
 	if !strings.Contains(sender.cards[0].Content, "**bold**") {
 		t.Fatalf("expected markdown content, got: %q", sender.cards[0].Content)
 	}
-	// Executing... and Done are plain text
+	// 执行中 and 完成 are plain text
 	hasExecuting := false
 	hasDone := false
 	for _, t2 := range sender.texts {
-		if strings.Contains(t2, "Executing...") {
+		if strings.Contains(t2, "执行中") {
 			hasExecuting = true
 		}
-		if strings.Contains(t2, "Done") {
+		if strings.Contains(t2, "完成") {
 			hasDone = true
 		}
 	}
 	if !hasExecuting {
-		t.Fatalf("expected 'Executing...' text, got texts: %v", sender.texts)
+		t.Fatalf("expected '执行中' text, got texts: %v", sender.texts)
 	}
 	if !hasDone {
-		t.Fatalf("expected 'Done' text, got texts: %v", sender.texts)
+		t.Fatalf("expected '完成' text, got texts: %v", sender.texts)
 	}
 }
 
@@ -1349,12 +1358,12 @@ func TestRouterExecClaude_ErrorIsRedCard(t *testing.T) {
 
 	var found bool
 	for _, c := range sender.cards {
-		if strings.HasPrefix(c.Title, "Error") && c.Template == "red" {
+		if strings.Contains(c.Title, "出错") && c.Template == "red" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected red Error card, got cards: %+v texts: %v", sender.cards, sender.texts)
+		t.Fatalf("expected red 出错 card, got cards: %+v texts: %v", sender.cards, sender.texts)
 	}
 }
 
@@ -1405,15 +1414,15 @@ echo '{"type":"result","result":"Final answer","session_id":"s1"}'
 	if !strings.Contains(sender.cards[0].Content, "Final answer") {
 		t.Fatalf("expected final answer in result card, got: %q", sender.cards[0].Content)
 	}
-	// Done as plain text
+	// 完成 as plain text
 	hasDone := false
 	for _, t2 := range sender.texts {
-		if strings.Contains(t2, "Done") {
+		if strings.Contains(t2, "完成") {
 			hasDone = true
 		}
 	}
 	if !hasDone {
-		t.Fatalf("expected 'Done' text, got texts: %v", sender.texts)
+		t.Fatalf("expected '完成' text, got texts: %v", sender.texts)
 	}
 }
 
@@ -1431,12 +1440,12 @@ func TestRouterExecClaude_EmptyResponse(t *testing.T) {
 
 	var found bool
 	for _, c := range sender.cards {
-		if strings.Contains(c.Content, "(empty response)") {
+		if strings.Contains(c.Content, "无输出") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected '(empty response)' card, got cards: %+v texts: %v", sender.cards, sender.texts)
+		t.Fatalf("expected '无输出' card, got cards: %+v texts: %v", sender.cards, sender.texts)
 	}
 }
 

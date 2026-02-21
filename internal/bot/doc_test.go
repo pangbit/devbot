@@ -419,7 +419,7 @@ func TestDoc_UnknownSubcommand(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc foo")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Unknown") || !strings.Contains(msg, "doc") {
+	if !strings.Contains(msg, "未知的 doc 子命令") {
 		t.Fatalf("expected unknown subcommand message, got: %q", msg)
 	}
 }
@@ -430,7 +430,7 @@ func TestDoc_NoSubcommand(t *testing.T) {
 
 	r.Route(context.Background(), "chat1", "user1", "/doc")
 	msg := sender.LastMessage()
-	if !strings.Contains(msg, "Usage") || !strings.Contains(msg, "doc") {
+	if !strings.Contains(msg, "用法") || !strings.Contains(msg, "doc") {
 		t.Fatalf("expected usage message, got: %q", msg)
 	}
 }

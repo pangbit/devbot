@@ -130,7 +130,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/doc":
 		r.cmdDoc(ctx, chatID, args)
 	default:
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Unknown command: %s\nUse /help to see available commands.", cmd))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("未知命令: %s\n\n使用 /help 查看所有可用命令。", cmd))
 	}
 }
 
@@ -139,49 +139,49 @@ func (r *Router) getSession(chatID string) Session {
 }
 
 func (r *Router) cmdHelp(ctx context.Context, chatID string) {
-	md := "**Basic:**\n" +
-		"`/help`  Show this help\n" +
-		"`/ping`  Check if bot is alive\n" +
-		"`/status`  Show current status and Claude usage\n\n" +
-		"**Directory:**\n" +
-		"`/root <path>`  Set root work directory\n" +
-		"`/cd <dir>`  Change directory (relative to root)\n" +
-		"`/pwd`  Show current directory\n" +
-		"`/ls`  List projects in root directory\n\n" +
-		"**Git:**\n" +
-		"`/git <args>`  Run git command\n" +
-		"`/diff`  Show current changes\n" +
-		"`/commit <msg>`  Quick commit\n" +
-		"`/push`  Quick push\n" +
-		"`/undo`  Discard uncommitted changes\n" +
-		"`/stash [pop]`  Stash/restore changes\n\n" +
-		"**Session:**\n" +
-		"`/new`  Start new Claude session\n" +
-		"`/sessions`  List session history\n" +
-		"`/switch <id>`  Switch to session\n\n" +
-		"**Control:**\n" +
-		"`/kill`  Terminate current execution\n" +
-		"`/model <name>`  Switch Claude model\n" +
-		"`/yolo`  Enable unrestricted mode\n" +
-		"`/safe`  Restore safe mode\n" +
-		"`/last`  Show last Claude output\n" +
-		"`/summary`  Summarize last output\n\n" +
-		"**System:**\n" +
-		"`/sh <cmd>`  Run shell command (via Claude)\n" +
-		"`/file <path>`  Send project file to chat\n\n" +
-		"**Docs:**\n" +
-		"`/doc push <path>`  Push Markdown to Feishu doc\n" +
-		"`/doc pull <path>`  Pull shared doc to project\n" +
-		"`/doc bind <path> <url|id>`  Bind file to Feishu doc\n" +
-		"`/doc unbind <path>`  Unbind\n" +
-		"`/doc list`  List bindings\n\n" +
-		"Any other message is sent directly to Claude as a prompt."
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: "DevBot Help", Content: md})
+	md := "**🗺 导航:**\n" +
+		"`/root [path]`  查看/设置根工作目录\n" +
+		"`/cd <dir>`  切换项目目录（支持相对路径）\n" +
+		"`/pwd`  显示当前目录\n" +
+		"`/ls`  列出根目录下的项目\n\n" +
+		"**🤖 Claude 对话:**\n" +
+		"`/status`  查看当前会话状态\n" +
+		"`/new`  开启新对话（保留当前会话到历史）\n" +
+		"`/kill`  终止正在执行的任务\n" +
+		"`/last`  显示上次输出\n" +
+		"`/summary`  让 Claude 总结上次输出\n" +
+		"`/model [name]`  查看/切换模型（haiku/sonnet/opus）\n" +
+		"`/yolo`  开启无限制模式（Claude 可执行所有操作）\n" +
+		"`/safe`  恢复安全模式\n\n" +
+		"**🔀 历史会话:**\n" +
+		"`/sessions`  查看历史会话列表\n" +
+		"`/switch <id>`  切换到指定历史会话\n\n" +
+		"**🔧 Git:**\n" +
+		"`/diff`  查看当前变更\n" +
+		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
+		"`/push`  推送到远程\n" +
+		"`/undo`  撤销所有未提交的更改\n" +
+		"`/stash [pop]`  暂存/恢复更改\n" +
+		"`/git <args>`  执行任意 git 命令\n\n" +
+		"**📁 文件:**\n" +
+		"`/file <path>`  查看项目文件内容\n" +
+		"`/sh <cmd>`  通过 Claude 执行 Shell 命令\n\n" +
+		"**📄 飞书文档同步:**\n" +
+		"`/doc push <path>`  将 Markdown 文件推送到飞书文档\n" +
+		"`/doc pull <path>`  将飞书文档内容拉取到本地文件\n" +
+		"`/doc bind <path> <url|id>`  绑定本地文件到飞书文档\n" +
+		"`/doc unbind <path>`  解除绑定\n" +
+		"`/doc list`  查看所有绑定关系\n\n" +
+		"**💬 其他:**\n" +
+		"`/ping`  检查机器人是否在线\n" +
+		"`/help`  显示此帮助\n\n" +
+		"直接发送文字即可与 Claude 对话，也可发送图片或文件。"
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "DevBot 使用指南", Content: md})
 }
 
 func (r *Router) cmdPing(ctx context.Context, chatID string) {
 	uptime := time.Since(r.startTime).Truncate(time.Second)
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("pong (uptime: %s)", uptime))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("pong ✓ (已运行 %s)", uptime))
 }
 
 func (r *Router) cmdStatus(ctx context.Context, chatID string) {
@@ -203,18 +203,26 @@ func (r *Router) cmdStatus(ctx context.Context, chatID string) {
 		lastExecStr = lastExec.String()
 	}
 
-	md := fmt.Sprintf("**WorkDir:**  %s\n**Session:**  %s\n**Model:**    %s\n**Mode:**     %s\n**Running:**  %v\n**Execs:**    %d\n**LastExec:** %s\n**Queued:**   %d\n**Uptime:**   %s",
+	runningStr := "空闲"
+	if r.executor.IsRunning() {
+		runningStr = "执行中..."
+	}
+	sessionStr := session.ClaudeSessionID
+	if sessionStr == "" {
+		sessionStr = "（新会话）"
+	}
+	md := fmt.Sprintf("**工作目录:** `%s`\n**会话 ID:**   `%s`\n**模型:**      %s\n**模式:**      %s\n**状态:**      %s\n**执行次数:** %d\n**上次耗时:** %s\n**待执行队列:** %d\n**运行时长:** %s",
 		session.WorkDir,
-		session.ClaudeSessionID,
+		sessionStr,
 		session.Model,
 		mode,
-		r.executor.IsRunning(),
+		runningStr,
 		r.executor.ExecCount(),
 		lastExecStr,
 		queuePending,
 		uptime,
 	)
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Status", Content: md})
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "当前状态", Content: md})
 }
 
 func (r *Router) cmdPwd(ctx context.Context, chatID string) {
@@ -236,40 +244,43 @@ func (r *Router) cmdLs(ctx context.Context, chatID string) {
 		}
 	}
 	if len(dirs) == 0 {
-		r.sender.SendText(ctx, chatID, "No projects found in "+root)
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("根目录 %s 下暂无项目目录。\n使用 /cd <目录名> 切换到指定目录。", root))
 		return
 	}
-	r.sender.SendText(ctx, chatID, strings.Join(dirs, "\n"))
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("项目列表 (%s)", root),
+		Content: strings.Join(dirs, "\n"),
+	})
 }
 
 func (r *Router) cmdRoot(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Current root: "+r.store.WorkRoot())
+		r.sender.SendText(ctx, chatID, "当前根目录: "+r.store.WorkRoot())
 		return
 	}
 	if !filepath.IsAbs(args) {
-		r.sender.SendText(ctx, chatID, "Root must be an absolute path.")
+		r.sender.SendText(ctx, chatID, "根目录必须是绝对路径，例如: /home/user/projects")
 		return
 	}
 	cleaned := filepath.Clean(args)
 	if cleaned == "/" || strings.HasPrefix(cleaned, "/etc") ||
 		strings.HasPrefix(cleaned, "/var") || strings.HasPrefix(cleaned, "/usr") ||
 		strings.HasPrefix(cleaned, "/sys") || strings.HasPrefix(cleaned, "/proc") {
-		r.sender.SendText(ctx, chatID, "Cannot set root to a system directory.")
+		r.sender.SendText(ctx, chatID, "不允许将系统目录设为根目录。")
 		return
 	}
 	info, err := os.Stat(args)
 	if err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Directory not found: %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("目录不存在: %s", args))
 		return
 	}
 	if !info.IsDir() {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Not a directory: %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("不是目录: %s", args))
 		return
 	}
 	r.store.SetWorkRoot(args)
 	r.save()
-	r.sender.SendText(ctx, chatID, "Root set to: "+args)
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 根目录已设置为: %s", args))
 }
 
 func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
@@ -295,7 +306,20 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 	}
 
 	if _, err := os.Stat(target); err != nil {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("Directory not found: %s", target))
+		// Show available subdirectories to help user navigate
+		msg := fmt.Sprintf("目录不存在: %s", target)
+		if entries, readErr := os.ReadDir(root); readErr == nil {
+			var dirs []string
+			for _, e := range entries {
+				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+					dirs = append(dirs, e.Name())
+				}
+			}
+			if len(dirs) > 0 {
+				msg += "\n\n可用目录:\n" + strings.Join(dirs, "  /  ")
+			}
+		}
+		r.sender.SendText(ctx, chatID, msg)
 		return
 	}
 	r.store.UpdateSession(chatID, func(s *Session) {
@@ -312,12 +336,14 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		s.LastOutput = ""
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, "Changed to: "+target)
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已切换到: %s", target))
 }
 
 func (r *Router) cmdNewSession(ctx context.Context, chatID string) {
 	r.getSession(chatID) // ensure session exists
+	var oldSessionID string
 	r.store.UpdateSession(chatID, func(s *Session) {
+		oldSessionID = s.ClaudeSessionID
 		if s.ClaudeSessionID != "" {
 			s.History = append(s.History, s.ClaudeSessionID)
 		}
@@ -325,54 +351,82 @@ func (r *Router) cmdNewSession(ctx context.Context, chatID string) {
 		s.LastOutput = ""
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, "New session started.")
+	if oldSessionID != "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("已开启新对话。旧会话 %s 已保存到历史，可用 /sessions 查看或 /switch 恢复。", oldSessionID))
+	} else {
+		r.sender.SendText(ctx, chatID, "已开启新对话。")
+	}
 }
 
 func (r *Router) cmdSessions(ctx context.Context, chatID string) {
 	session := r.getSession(chatID)
 	if len(session.History) == 0 && session.ClaudeSessionID == "" {
-		r.sender.SendText(ctx, chatID, "No sessions.")
+		r.sender.SendText(ctx, chatID, "暂无历史会话。发送消息后会自动创建会话。")
 		return
 	}
 	var lines []string
 	for i, id := range session.History {
-		lines = append(lines, fmt.Sprintf("  %d: %s", i, id))
+		lines = append(lines, fmt.Sprintf("  `%d`: %s  （使用 `/switch %d` 恢复）", i, id, i))
 	}
 	if session.ClaudeSessionID != "" {
-		lines = append(lines, fmt.Sprintf("  **\\* %s** (current)", session.ClaudeSessionID))
+		lines = append(lines, fmt.Sprintf("\n**当前:** `%s`", session.ClaudeSessionID))
 	}
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Sessions", Content: strings.Join(lines, "\n")})
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "历史会话", Content: strings.Join(lines, "\n")})
 }
 
 func (r *Router) cmdSwitch(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /switch <session-id>")
+		r.sender.SendText(ctx, chatID, "用法: /switch <序号或会话ID>\n\n使用 /sessions 查看可用会话列表。")
 		return
 	}
 	r.getSession(chatID) // ensure session exists
+
+	// Support switching by index (from /sessions list)
+	targetID := args
+	if idx, err := fmt.Sscanf(args, "%d", new(int)); err == nil && idx == 1 {
+		var idxVal int
+		fmt.Sscanf(args, "%d", &idxVal)
+		session := r.getSession(chatID)
+		if idxVal >= 0 && idxVal < len(session.History) {
+			targetID = session.History[idxVal]
+		} else {
+			r.sender.SendText(ctx, chatID, fmt.Sprintf("序号 %d 不存在，请用 /sessions 查看有效序号。", idxVal))
+			return
+		}
+	}
+
 	r.store.UpdateSession(chatID, func(s *Session) {
 		if s.ClaudeSessionID != "" {
 			s.History = append(s.History, s.ClaudeSessionID)
 		}
-		s.ClaudeSessionID = args
+		s.ClaudeSessionID = targetID
 		s.LastOutput = ""
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, "Switched to session: "+args)
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已切换到会话: %s", targetID))
 }
 
 func (r *Router) cmdKill(ctx context.Context, chatID string) {
 	if err := r.executor.Kill(); err != nil {
-		r.sender.SendText(ctx, chatID, "No running task to kill.")
+		r.sender.SendText(ctx, chatID, "当前没有正在执行的任务。")
 		return
 	}
-	r.sender.SendText(ctx, chatID, "Task killed.")
+	r.sender.SendText(ctx, chatID, "✓ 任务已终止。")
 }
 
 func (r *Router) cmdModel(ctx context.Context, chatID, args string) {
 	if args == "" {
 		session := r.getSession(chatID)
-		r.sender.SendText(ctx, chatID, "Current model: "+session.Model)
+		current := session.Model
+		if current == "" {
+			current = r.executor.Model()
+		}
+		md := fmt.Sprintf("**当前模型:** `%s`\n\n**可选模型:**\n", current) +
+			"- `haiku`  最快，适合简单任务和代码补全\n" +
+			"- `sonnet`  均衡，推荐日常使用\n" +
+			"- `opus`  最强，适合复杂推理和长任务\n\n" +
+			"使用 `/model <名称>` 切换，例如 `/model opus`"
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "模型设置", Content: md})
 		return
 	}
 	r.getSession(chatID) // ensure session exists
@@ -380,7 +434,7 @@ func (r *Router) cmdModel(ctx context.Context, chatID, args string) {
 		s.Model = args
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, "Model set to: "+args)
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 模型已切换为: %s", args))
 }
 
 func (r *Router) cmdYolo(ctx context.Context, chatID string) {
@@ -389,7 +443,13 @@ func (r *Router) cmdYolo(ctx context.Context, chatID string) {
 		s.PermissionMode = "yolo"
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, "YOLO mode enabled. Claude will execute without restrictions.")
+	md := "⚠️ **已开启无限制模式（YOLO）**\n\n" +
+		"Claude 现在可以执行所有操作，包括：\n" +
+		"- 运行任意 Shell 命令\n" +
+		"- 修改、删除文件\n" +
+		"- 访问网络\n\n" +
+		"使用 `/safe` 恢复安全模式。"
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "⚠️ 无限制模式已开启", Content: md, Template: "orange"})
 }
 
 func (r *Router) cmdSafe(ctx context.Context, chatID string) {
@@ -398,7 +458,7 @@ func (r *Router) cmdSafe(ctx context.Context, chatID string) {
 		s.PermissionMode = "safe"
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, "Safe mode restored.")
+	r.sender.SendText(ctx, chatID, "✓ 已恢复安全模式，Claude 的操作需要确认。")
 }
 
 func (r *Router) cmdLast(ctx context.Context, chatID string) {
@@ -421,12 +481,13 @@ func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 }
 
 func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
-	if msg == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /commit <message>")
-		return
-	}
 	r.getSession(chatID) // ensure session exists
-	prompt := fmt.Sprintf("Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then commit with the message: %s\nOnly show the command output, no explanation.", msg)
+	var prompt string
+	if msg == "" {
+		prompt = "Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then write a concise commit message based on the changes (`git diff --cached`), and commit. Only show the final commit output, no explanation."
+	} else {
+		prompt = fmt.Sprintf("Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then commit with the message: %s\nOnly show the command output, no explanation.", msg)
+	}
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
@@ -438,7 +499,7 @@ func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Usage: /sh <command>")
+		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
 		return
 	}
 	r.getSession(chatID) // ensure session exists
@@ -568,9 +629,9 @@ func (r *Router) cmdDoc(ctx context.Context, chatID, args string) {
 	case "list":
 		r.cmdDocList(ctx, chatID)
 	case "":
-		r.sender.SendText(ctx, chatID, "Usage: /doc push|pull|bind|unbind|list")
+		r.sender.SendText(ctx, chatID, "用法: /doc <子命令>\n\n子命令: push | pull | bind | unbind | list\n示例: /doc push README.md")
 	default:
-		r.sender.SendText(ctx, chatID, "Unknown doc subcommand. Usage: /doc push|pull|bind|unbind|list")
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("未知的 doc 子命令: %s\n\n支持的子命令: push | pull | bind | unbind | list", sub))
 	}
 }
 
@@ -793,7 +854,7 @@ func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string,
 		return
 	}
 
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("File saved to: %s", filePath))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 文件已保存: %s", filePath))
 	prompt := fmt.Sprintf("User sent a file '%s', saved to: %s. Examine or process this file as needed.", fileName, filePath)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
@@ -802,7 +863,7 @@ func (r *Router) RouteDocShare(ctx context.Context, chatID, userID, docID string
 	if !r.allowedUsers[userID] {
 		return
 	}
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Detected Feishu doc: %s\nUse /doc bind <path> %s to bind it to a local file.\nOr /doc pull <path> if already bound.", docID, docID))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("检测到飞书文档: %s\n\n- 使用 `/doc bind <本地路径> %s` 绑定到本地文件\n- 或使用 `/doc pull <路径>` 拉取内容（如已绑定）", docID, docID))
 }
 
 func (r *Router) handlePrompt(ctx context.Context, chatID, text string) {
@@ -814,12 +875,12 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt str
 	if r.queue != nil {
 		pending := r.queue.PendingCount(chatID)
 		if pending > 0 {
-			r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Queued (position %d)", pending+1), Template: "blue"})
+			r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("已排队（第 %d 位）", pending+1), Content: "当前有任务正在执行，请稍候...", Template: "blue"})
 		}
 		if err := r.queue.Enqueue(chatID, func() {
 			r.execClaude(r.ctx, chatID, prompt)
 		}); err != nil {
-			r.sender.SendText(ctx, chatID, "Queue is full, please try again later.")
+			r.sender.SendText(ctx, chatID, "队列已满，请稍后再试。")
 		}
 	} else {
 		r.execClaude(ctx, chatID, prompt)
@@ -827,7 +888,7 @@ func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt str
 }
 
 func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
-	r.sender.SendText(ctx, chatID, "Executing...")
+	r.sender.SendText(ctx, chatID, "执行中...")
 
 	workDir, sessionID, permMode, model := r.store.SessionExecParams(chatID)
 	if permMode == "" {
@@ -878,7 +939,7 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	}
 	if err != nil {
 		log.Printf("router: execClaude error chat=%s elapsed=%s: %v", chatID, elapsed, err)
-		r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("Error (%s)", elapsed), Content: fmt.Sprintf("%v", err), Template: "red"})
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("执行出错（%s）", elapsed), Content: fmt.Sprintf("%v", err), Template: "red"})
 		return
 	}
 
@@ -899,12 +960,12 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 
 	output := result.Output
 	if output == "" {
-		output = "(empty response)"
+		output = "（无输出）"
 	}
 	output = strings.TrimSpace(output)
 	if result.IsPermissionDenial {
 		if output != lastProgressContent {
-			r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 想确认", Content: output, Template: "purple"})
+			r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 需要确认", Content: output + "\n\n使用 `/yolo` 开启无限制模式以跳过确认。", Template: "purple"})
 		}
 		return
 	}
@@ -912,5 +973,5 @@ func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) {
 	if output != lastProgressContent {
 		r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
 	}
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("Done (%s)", elapsed))
+	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 完成（耗时 %s）", elapsed))
 }
