@@ -217,7 +217,8 @@ tail -f /opt/devbot/devbot.log # 文件日志
 **搜索与文件：**
 - `/grep <pattern>` — 在代码中搜索关键词（支持多种文件类型）
 - `/find <name>` — 按文件名查找文件（支持通配符，如 `*.go`）
-- `/test [pattern]` — 运行项目测试（自动识别 Go/Node/Python/Rust）
+- `/test [pattern]` — 运行项目测试（Go 项目即时执行，其他借助 Claude）
+- `/todo` — 搜索代码中的 TODO/FIXME/HACK/BUG 注释（即时响应）
 - `/recent [n]` — 列出最近修改的 n 个文件（默认 10 个）
 - `/debug` — 分析上次输出中的错误并给出修复建议
 - `/exec <cmd>` — 直接执行 Shell 命令（即时返回，无需 Claude，适合 `ls`、`make`、`go test` 等）

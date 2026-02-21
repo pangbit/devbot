@@ -3128,6 +3128,130 @@ func TestRouterPush_SuccessWithOutput(t *testing.T) {
 	}
 }
 
+// --- /todo tests ---
+
+func TestRouterTodo_NoTodos(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/todo")
+
+	if !strings.Contains(sender.LastMessage(), "没有找到") {
+		t.Fatalf("expected no-todos message, got: %q", sender.LastMessage())
+	}
+}
+
+func TestRouterTodo_HasTodos(t *testing.T) {
+	dir := t.TempDir()
+	content := "package main\n// TODO: fix this later\n// FIXME: urgent bug\nfunc main() {}\n"
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte(content), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/todo")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card with todo items")
+	}
+	if !strings.Contains(sender.cards[0].Content, "TODO") {
+		t.Fatalf("expected TODO in content, got: %q", sender.cards[0].Content)
+	}
+	if !strings.Contains(sender.cards[0].Title, "待办") {
+		t.Fatalf("expected '待办' in title, got: %q", sender.cards[0].Title)
+	}
+}
+
+// --- /test (Go fast path) tests ---
+
+func TestRouterTest_GoProject_NoPattern(t *testing.T) {
+	// Create a minimal Go project with a simple passing test
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.20\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestOK(t *testing.T) {}\n"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/test")
+
+	// Should get a card (fast path detected go.mod)
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /test on Go project")
+	}
+	title := sender.cards[0].Title
+	if !strings.Contains(title, "go test") {
+		t.Fatalf("expected 'go test' in title, got: %q", title)
+	}
+}
+
+func TestRouterTest_GoProject_WithPattern(t *testing.T) {
+	// Test with a pattern filter
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.20\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestFoo(t *testing.T) {}\n"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/test Foo")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /test with pattern")
+	}
+}
+
+func TestRouterTest_GoProject_FailingTests(t *testing.T) {
+	// Failing tests should show red card
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.20\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestFail(t *testing.T) { t.Fatal(\"intentional failure\") }\n"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/test")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /test with failing tests")
+	}
+	if sender.cards[0].Template != "red" {
+		t.Fatalf("expected red template for failed tests, got: %q", sender.cards[0].Template)
+	}
+}
+
+func TestRouterTest_NonGoProject_GoesToClaude(t *testing.T) {
+	// Non-Go project should fall through to Claude (send "执行中" or queue)
+	dir := t.TempDir()
+	// No go.mod in this dir
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/test")
+
+	// Should trigger Claude (executor will try to run but fail since no real claude)
+	// Just verify we don't crash and some response comes back
+	_ = sender.LastMessage()
+}
+
 // --- /minInt unit test ---
 
 func TestMinInt(t *testing.T) {

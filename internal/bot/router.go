@@ -145,6 +145,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdFind(ctx, chatID, args)
 	case "/test":
 		r.cmdTest(ctx, chatID, args)
+	case "/todo":
+		r.cmdTodo(ctx, chatID)
 	case "/recent":
 		r.cmdRecent(ctx, chatID, args)
 	case "/debug":
@@ -205,7 +207,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"**📁 文件与搜索:**\n" +
 		"`/grep <pattern>`  在代码中搜索关键词（内容搜索）\n" +
 		"`/find <name>`  按文件名查找文件（支持通配符，如 *.go）\n" +
-		"`/test [pattern]`  运行项目测试（自动识别 Go/Node/Python/Rust）\n" +
+		"`/test [pattern]`  运行项目测试（Go 即时执行，其他借助 Claude）\n" +
+		"`/todo`  搜索代码中的 TODO/FIXME/HACK/BUG 注释\n" +
 		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
 		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
 		"`/file <path>`  查看项目文件内容\n" +
@@ -890,14 +893,95 @@ func (r *Router) cmdFind(ctx context.Context, chatID, args string) {
 }
 
 func (r *Router) cmdTest(ctx context.Context, chatID, args string) {
-	r.getSession(chatID) // ensure session exists
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	// Fast path: if go.mod exists, run go test directly (no Claude overhead)
+	if _, err := os.Stat(filepath.Join(workDir, "go.mod")); err == nil {
+		execCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		defer cancel()
+		var cmdArgs []string
+		if args != "" {
+			cmdArgs = []string{"test", "./...", "-run", args, "-v"}
+		} else {
+			cmdArgs = []string{"test", "./..."}
+		}
+		cmd := exec.CommandContext(execCtx, "go", cmdArgs...)
+		cmd.Dir = workDir
+		var outBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &outBuf
+		runErr := cmd.Run()
+		output := strings.TrimSpace(outBuf.String())
+		if runes := []rune(output); len(runes) > 4000 {
+			output = "（输出过长，仅显示末尾部分）\n\n" + string(runes[len(runes)-4000:])
+		}
+		if output == "" {
+			output = "（无输出）"
+		}
+		tpl := "green"
+		title := "go test 通过"
+		if runErr != nil {
+			tpl = "red"
+			title = "go test 失败"
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + output + "\n```", Template: tpl})
+		return
+	}
+
+	// Fall back to Claude for other project types
 	var prompt string
 	if args == "" {
-		prompt = "Detect the project type and run its tests: `go test ./... 2>&1` for Go, `npm test 2>&1` for Node, `pytest 2>&1` for Python, `cargo test 2>&1` for Rust. Show test results focused on failures. Only show the command output, no explanation."
+		prompt = "Detect the project type and run its tests: `npm test 2>&1` for Node, `pytest 2>&1` for Python, `cargo test 2>&1` for Rust. Show test results focused on failures. Only show the command output, no explanation."
 	} else {
-		prompt = fmt.Sprintf("Run tests matching %q: try `go test ./... -run %q 2>&1`, or `npm test -- --grep %q 2>&1`, or `pytest -k %q 2>&1`. Show results focused on failures. Only show the command output.", args, args, args, args)
+		prompt = fmt.Sprintf("Run tests matching %q: try `npm test -- --grep %q 2>&1`, or `pytest -k %q 2>&1`, or `cargo test %q 2>&1`. Show results focused on failures. Only show the command output.", args, args, args, args)
 	}
 	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdTodo(ctx context.Context, chatID string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "grep", "-rn",
+		"--include=*.go", "--include=*.ts", "--include=*.tsx", "--include=*.js",
+		"--include=*.py", "--include=*.java", "--include=*.rs", "--include=*.rb",
+		"--include=*.c", "--include=*.cpp", "--include=*.h", "--include=*.sh",
+		"--exclude-dir=.git", "--exclude-dir=node_modules",
+		"--exclude-dir=vendor", "--exclude-dir=dist",
+		"-E", "TODO|FIXME|HACK|BUG|XXX", ".")
+	cmd.Dir = workDir
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	cmd.Run()
+
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		r.sender.SendText(ctx, chatID, "没有找到 TODO/FIXME/HACK/BUG 注释，代码很干净！")
+		return
+	}
+
+	const maxOut = 4000
+	if runes := []rune(output); len(runes) > maxOut {
+		output = fmt.Sprintf("（结果过多，仅显示前 %d 字符）\n\n", maxOut) + string(runes[:maxOut])
+	}
+
+	// Count items
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("待办事项 (%d 处)", len(lines)),
+		Content: "```\n" + output + "\n```",
+	})
 }
 
 func (r *Router) cmdDebug(ctx context.Context, chatID string) {
@@ -1107,7 +1191,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
 	"/undo", "/stash",
-	"/grep", "/find", "/test", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
+	"/grep", "/find", "/test", "/todo", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }
 
