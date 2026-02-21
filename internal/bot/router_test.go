@@ -863,17 +863,11 @@ func TestRouterHandlePrompt_SavesLastPrompt(t *testing.T) {
 
 func TestRouterLog_DefaultCount(t *testing.T) {
 	r, sender := newTestRouter(t)
-	// /log without args should trigger execution (not error/usage msg)
+	// /log in a non-git dir should return a "no commits" message
 	r.Route(context.Background(), "chat1", "user1", "/log")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected /log to trigger execution, got: %v", msgs)
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatalf("expected some message from /log, got none")
 	}
 }
 
@@ -1252,7 +1246,6 @@ func TestRouterExecCommands(t *testing.T) {
 		{"commit", "/commit fix bug"},
 		{"git", "/git status"},
 		{"sh", "/sh echo hello"},
-		{"diff", "/diff"},
 		{"push", "/push"},
 		{"undo", "/undo"},
 		{"stash", "/stash"},
@@ -1910,16 +1903,11 @@ func TestRouterSwitch_ByOutOfRangeIndex(t *testing.T) {
 
 func TestRouterLog_WithCount(t *testing.T) {
 	r, sender := newTestRouter(t)
+	// /log 5 should produce some response (either commits or "no commits" message)
 	r.Route(context.Background(), "chat1", "user1", "/log 5")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected /log 5 to trigger execution, got: %v", msgs)
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatalf("expected some message from /log 5, got none")
 	}
 }
 
@@ -2517,6 +2505,110 @@ printf '{"type":"result","is_error":false,"result":"recovered ok","session_id":"
 	}
 	if !found {
 		t.Fatalf("expected '完成' in messages after recovery, got: %v", snd.messages)
+	}
+}
+
+// --- Direct /diff and /log tests ---
+
+func TestRouterDiff_NoChanges(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/diff")
+	msg := sender.LastMessage()
+	// Non-git dir: "no changes" or git diff shows nothing
+	if msg == "" {
+		t.Fatalf("expected some response from /diff")
+	}
+}
+
+func TestRouterDiff_InGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	// Init git repo with a commit, then modify a file
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("original"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	// Now modify file to create a diff
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("modified"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	// Set workDir
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/diff")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with diff output, texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "modified") && !strings.Contains(sender.cards[0].Content, "original") {
+		t.Fatalf("expected diff content, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterLog_InGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("init"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "initial commit").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/log")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with log output, texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "initial commit") {
+		t.Fatalf("expected 'initial commit' in log output, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterDiff_StagedChanges(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("original"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	// Stage a new change
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("staged change"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/diff")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected diff card for staged changes, texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "已暂存") {
+		t.Fatalf("expected '已暂存' in staged diff card, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterLog_NoGitRepo(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/log")
+	msg := sender.LastMessage()
+	// Non-git dir: either "no commits" message or git error message
+	if msg == "" {
+		t.Fatalf("expected some message from /log in non-git dir")
 	}
 }
 

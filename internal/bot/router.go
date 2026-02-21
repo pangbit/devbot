@@ -116,7 +116,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/git":
 		r.cmdGit(ctx, chatID, args)
 	case "/diff":
-		r.cmdGit(ctx, chatID, "diff")
+		r.cmdDiff(ctx, chatID)
 	case "/commit":
 		r.cmdCommit(ctx, chatID, args)
 	case "/push":
@@ -633,13 +633,51 @@ func (r *Router) cmdUndo(ctx context.Context, chatID string) {
 }
 
 func (r *Router) cmdLog(ctx context.Context, chatID, args string) {
-	r.getSession(chatID) // ensure session exists
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
 	count := "20"
 	if args != "" {
 		count = args
 	}
-	prompt := fmt.Sprintf("Run `git log --oneline -%s` in the current directory and return the output. Only show the command output, no explanation.", count)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	output, err := runGitOutput(workDir, "log", "--oneline", "-"+count)
+	if err != nil || output == "" {
+		if output != "" {
+			r.sender.SendText(ctx, chatID, "git log 出错: "+output)
+		} else {
+			r.sender.SendText(ctx, chatID, "当前目录无 git 提交记录。")
+		}
+		return
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("最近 %s 次提交", count), Content: "```\n" + output + "\n```"})
+}
+
+func (r *Router) cmdDiff(ctx context.Context, chatID string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	output, _ := runGitOutput(workDir, "diff")
+	staged, _ := runGitOutput(workDir, "diff", "--cached")
+	combined := ""
+	if output != "" {
+		combined += "**未暂存的更改:**\n```diff\n" + output + "\n```\n"
+	}
+	if staged != "" {
+		combined += "**已暂存的更改:**\n```diff\n" + staged + "\n```"
+	}
+	combined = strings.TrimSpace(combined)
+	if runes := []rune(combined); len(runes) > 4000 {
+		combined = "（内容过长，仅显示末尾部分）\n\n" + string(runes[len(runes)-4000:])
+	}
+	if combined == "" {
+		r.sender.SendText(ctx, chatID, "没有任何未提交的更改。")
+		return
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "git diff", Content: combined})
 }
 
 func (r *Router) cmdBranch(ctx context.Context, chatID, args string) {
@@ -874,6 +912,18 @@ func gitStatusSummary(workDir string) string {
 	}
 	lines := strings.Split(output, "\n")
 	return fmt.Sprintf("%d 个文件变更", len(lines))
+}
+
+// runGitOutput runs a git command in workDir and returns combined stdout+stderr output.
+// Returns ("", err) on failure.
+func runGitOutput(workDir string, args ...string) (string, error) {
+	fullArgs := append([]string{"-C", workDir}, args...)
+	cmd := exec.Command("git", fullArgs...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	return strings.TrimSpace(out.String()), err
 }
 
 // truncateForDisplay trims text to at most maxRunes runes, adding a header note if truncated.
