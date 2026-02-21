@@ -165,6 +165,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdTree(ctx, chatID, args)
 	case "/size":
 		r.cmdSize(ctx, chatID, args)
+	case "/stats":
+		r.cmdStats(ctx, chatID)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/exec":
@@ -231,6 +233,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
 		"`/tree [dir]`  显示目录结构（最多 2 层深度，优先使用系统 tree 命令）\n" +
 		"`/size [path]`  查看文件或目录的磁盘占用大小\n" +
+		"`/stats`  项目统计：文件数、代码行数、文件类型分布、最近提交\n" +
 		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/exec <cmd>`  直接执行 Shell 命令（即时返回，无需 Claude）\n" +
@@ -1441,6 +1444,110 @@ func (r *Router) cmdSize(ctx context.Context, chatID, args string) {
 	})
 }
 
+func (r *Router) cmdStats(ctx context.Context, chatID string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	// Count files by extension
+	extCount := make(map[string]int)
+	extLines := make(map[string]int)
+	totalFiles := 0
+
+	_ = filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		// Skip hidden dirs and common ignore dirs
+		rel, _ := filepath.Rel(workDir, path)
+		for _, part := range strings.Split(rel, string(filepath.Separator)) {
+			if strings.HasPrefix(part, ".") || part == "node_modules" || part == "vendor" || part == "dist" {
+				return filepath.SkipDir
+			}
+		}
+		ext := strings.ToLower(filepath.Ext(info.Name()))
+		if ext == "" {
+			return nil
+		}
+		extCount[ext]++
+		totalFiles++
+		// Count lines for code files (limit size to avoid slow reads)
+		codeExts := map[string]bool{
+			".go": true, ".ts": true, ".tsx": true, ".js": true, ".jsx": true,
+			".py": true, ".java": true, ".rs": true, ".c": true, ".cpp": true,
+			".h": true, ".rb": true, ".sh": true, ".swift": true, ".kt": true,
+		}
+		if codeExts[ext] && info.Size() < 512*1024 {
+			data, e := os.ReadFile(path)
+			if e == nil {
+				extLines[ext] += strings.Count(string(data), "\n") + 1
+			}
+		}
+		return nil
+	})
+
+	if totalFiles == 0 {
+		r.sender.SendText(ctx, chatID, "当前目录无文件或目录不存在。")
+		return
+	}
+
+	// Build output: sort by count
+	type extStat struct {
+		ext   string
+		count int
+		lines int
+	}
+	var stats []extStat
+	for ext, cnt := range extCount {
+		stats = append(stats, extStat{ext, cnt, extLines[ext]})
+	}
+	// Sort by file count descending
+	for i := 0; i < len(stats); i++ {
+		for j := i + 1; j < len(stats); j++ {
+			if stats[j].count > stats[i].count {
+				stats[i], stats[j] = stats[j], stats[i]
+			}
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**总文件数:** %d\n\n", totalFiles))
+
+	totalLines := 0
+	for _, s := range extLines {
+		totalLines += s
+	}
+	if totalLines > 0 {
+		sb.WriteString(fmt.Sprintf("**代码行数:** %d\n\n", totalLines))
+	}
+
+	sb.WriteString("**文件类型分布:**\n```\n")
+	limit := len(stats)
+	if limit > 15 {
+		limit = 15
+	}
+	for _, s := range stats[:limit] {
+		if s.lines > 0 {
+			sb.WriteString(fmt.Sprintf("%-10s %4d 文件  %6d 行\n", s.ext, s.count, s.lines))
+		} else {
+			sb.WriteString(fmt.Sprintf("%-10s %4d 文件\n", s.ext, s.count))
+		}
+	}
+	sb.WriteString("```")
+
+	// Last commit
+	if lastCommit, err := runGitOutput(workDir, "log", "-1", "--pretty=format:%h %s (%ar)"); err == nil && lastCommit != "" {
+		sb.WriteString(fmt.Sprintf("\n\n**最近提交:** %s", lastCommit))
+	}
+
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("项目统计: %s", filepath.Base(workDir)),
+		Content: sb.String(),
+	})
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -1590,7 +1697,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
 	"/undo", "/stash", "/clean",
-	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/size", "/debug", "/sh", "/exec", "/file", "/compact",
+	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/size", "/stats", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }
 

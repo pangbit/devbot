@@ -4143,3 +4143,44 @@ func TestRouterSize_WithPath(t *testing.T) {
 		t.Fatal("expected a card from /size sub")
 	}
 }
+
+// --- /stats tests ---
+
+func TestRouterStats_WithCodeFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "util.go"), []byte("package main\n\nfunc helper() {}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Project\n"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/stats")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /stats")
+	}
+	content := sender.cards[0].Content
+	if !strings.Contains(content, "总文件数") {
+		t.Fatalf("expected '总文件数' in stats, got: %q", content)
+	}
+	if !strings.Contains(content, ".go") {
+		t.Fatalf("expected .go in file type breakdown, got: %q", content)
+	}
+}
+
+func TestRouterStats_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/stats")
+
+	if sender.LastMessage() == "" {
+		t.Fatal("expected some response from /stats on empty dir")
+	}
+}
