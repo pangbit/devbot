@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1693,5 +1694,165 @@ func TestRouterStatus_ShowsGitFields(t *testing.T) {
 	}
 	if !strings.Contains(msg, "工作区") {
 		t.Fatalf("expected '工作区' in status, got: %q", msg)
+	}
+}
+
+// --- gitBranch / gitStatusSummary unit tests ---
+
+func TestGitBranch_EmptyWorkDir(t *testing.T) {
+	if gitBranch("") != "" {
+		t.Fatal("expected empty string for empty workDir")
+	}
+}
+
+func TestGitBranch_NonGitDir(t *testing.T) {
+	dir := t.TempDir()
+	if gitBranch(dir) != "" {
+		t.Fatalf("expected empty for non-git dir")
+	}
+}
+
+func TestGitBranch_RealRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+	branch := gitBranch(dir)
+	if branch == "" {
+		t.Fatalf("expected non-empty branch for valid git repo")
+	}
+}
+
+func TestGitStatusSummary_EmptyWorkDir(t *testing.T) {
+	if gitStatusSummary("") != "" {
+		t.Fatal("expected empty string for empty workDir")
+	}
+}
+
+func TestGitStatusSummary_NonGitDir(t *testing.T) {
+	dir := t.TempDir()
+	if gitStatusSummary(dir) != "" {
+		t.Fatalf("expected empty for non-git dir")
+	}
+}
+
+func TestGitStatusSummary_CleanRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+	result := gitStatusSummary(dir)
+	if result != "无变更" {
+		t.Fatalf("expected '无变更' for clean repo, got: %q", result)
+	}
+}
+
+func TestGitStatusSummary_DirtyRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+	// Create an untracked file — appears in git status --porcelain
+	os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("change"), 0644)
+	result := gitStatusSummary(dir)
+	if !strings.Contains(result, "文件变更") {
+		t.Fatalf("expected '文件变更' for dirty repo, got: %q", result)
+	}
+}
+
+// --- /switch by index tests ---
+
+func TestRouterSwitch_ByValidIndex(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.History = []string{"sess-0", "sess-1"}
+	})
+	r.Route(context.Background(), "chat1", "user1", "/switch 1")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "已切换到会话") || !strings.Contains(msg, "sess-1") {
+		t.Fatalf("expected switch to sess-1 by index, got: %q", msg)
+	}
+}
+
+func TestRouterSwitch_ByOutOfRangeIndex(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.getSession("chat1")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.History = []string{"sess-0"}
+	})
+	r.Route(context.Background(), "chat1", "user1", "/switch 99")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "不存在") {
+		t.Fatalf("expected out-of-range error, got: %q", msg)
+	}
+}
+
+// --- /log with count arg ---
+
+func TestRouterLog_WithCount(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/log 5")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /log 5 to trigger execution, got: %v", msgs)
+	}
+}
+
+// --- /branch with name arg ---
+
+func TestRouterBranch_WithName(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/branch feature/new")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /branch <name> to trigger execution, got: %v", msgs)
+	}
+}
+
+// --- /undo tests ---
+
+func TestRouterUndo_NoChanges(t *testing.T) {
+	// Non-git temp dir — gitStatusSummary returns "" so cmdUndo shows "无需撤销"
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/undo")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "没有未提交") {
+		t.Fatalf("expected no-changes message for /undo on non-git dir, got: %q", msg)
+	}
+}
+
+func TestRouterUndo_WithChanges(t *testing.T) {
+	dir := t.TempDir()
+	// Initialize a git repo with a dirty file
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+	os.WriteFile(filepath.Join(dir, "dirty.go"), []byte("change"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/undo")
+	msgs := sender.messages
+	// Should trigger execution (not the "no changes" message)
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /undo to trigger execution when changes exist, got: %v", msgs)
 	}
 }

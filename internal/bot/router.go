@@ -118,7 +118,7 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/push":
 		r.cmdGit(ctx, chatID, "push")
 	case "/undo":
-		r.cmdGit(ctx, chatID, "checkout .")
+		r.cmdUndo(ctx, chatID)
 	case "/stash":
 		if args == "" {
 			r.cmdGit(ctx, chatID, "stash")
@@ -182,7 +182,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
 		"`/push`  推送到远程\n" +
 		"`/pr [title]`  创建 Pull Request\n" +
-		"`/undo`  撤销所有未提交的更改\n" +
+		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/git <args>`  执行任意 git 命令\n\n" +
 		"**📁 文件与搜索:**\n" +
@@ -528,6 +528,17 @@ func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
 func (r *Router) cmdGit(ctx context.Context, chatID, args string) {
 	r.getSession(chatID) // ensure session exists
 	prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdUndo(ctx context.Context, chatID string) {
+	r.getSession(chatID) // ensure session exists
+	changes := gitStatusSummary(r.store.GetSession(chatID, r.store.WorkRoot(), r.executor.Model()).WorkDir)
+	if changes == "无变更" || changes == "" {
+		r.sender.SendText(ctx, chatID, "当前没有未提交的更改，无需撤销。")
+		return
+	}
+	prompt := fmt.Sprintf("⚠️ 即将撤销所有未提交的更改（%s）。运行 `git checkout .` 撤销工作目录变更（已暂存的变更不受影响）。只输出命令结果，不要解释。", changes)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
