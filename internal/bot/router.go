@@ -127,6 +127,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdPush(ctx, chatID, args)
 	case "/undo":
 		r.cmdUndo(ctx, chatID)
+	case "/clean":
+		r.cmdClean(ctx, chatID, args)
 	case "/stash":
 		r.cmdStash(ctx, chatID, args)
 	case "/log":
@@ -215,6 +217,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/pr [title]`  创建 Pull Request\n" +
 		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
+		"`/clean [-f]`  查看/清理未跟踪文件（默认预览，加 -f 确认删除）\n" +
 		"`/git <args>`  执行任意 git 命令\n\n" +
 		"**📁 文件与搜索:**\n" +
 		"`/grep <pattern>`  在代码中搜索关键词（内容搜索）\n" +
@@ -765,6 +768,41 @@ func (r *Router) cmdUndo(ctx context.Context, chatID string) {
 		return
 	}
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已撤销所有未提交的更改（原状态: %s）", changes))
+}
+
+func (r *Router) cmdClean(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	// Safety: always show dry-run first unless user explicitly passes "-f"
+	if args == "-f" || args == "--force" {
+		out, err := runGitOutput(workDir, "clean", "-fd")
+		tpl := "green"
+		title := "git clean 完成"
+		if err != nil {
+			tpl = "red"
+			title = "git clean 出错"
+		}
+		content := out
+		if content == "" {
+			content = "（没有需要清理的文件）"
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: content, Template: tpl})
+		return
+	}
+	// Default: dry-run to show what would be deleted
+	out, err := runGitOutput(workDir, "clean", "-nd")
+	if err != nil || out == "" {
+		r.sender.SendText(ctx, chatID, "没有需要清理的未跟踪文件。")
+		return
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:    "⚠️ 以下未跟踪文件将被删除",
+		Content:  out + "\n\n使用 `/clean -f` 确认删除，或 `/clean --force`",
+		Template: "orange",
+	})
 }
 
 func (r *Router) cmdStash(ctx context.Context, chatID, args string) {
@@ -1347,7 +1385,7 @@ var knownCommands = []string{
 	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
-	"/undo", "/stash",
+	"/undo", "/stash", "/clean",
 	"/grep", "/find", "/test", "/todo", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }

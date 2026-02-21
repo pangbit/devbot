@@ -202,6 +202,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/pr [title]` — 创建 Pull Request（使用 gh CLI）
 - `/undo` — 撤销所有未提交的更改（即时响应，含已暂存的更改）
 - `/stash [pop]` — 暂存/恢复更改（即时响应）
+- `/clean [-f]` — 查看/清理未跟踪文件（默认预览将被删除的文件，加 `-f` 或 `--force` 确认删除）
 
 **会话：**
 - `/new` — 开始新的 Claude 会话（旧会话保存到历史）

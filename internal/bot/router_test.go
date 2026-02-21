@@ -3073,6 +3073,26 @@ func TestRouterDiff_DefaultWorkDir(t *testing.T) {
 	}
 }
 
+func TestRouterRecent_DefaultWorkDir(t *testing.T) {
+	// /recent with empty session WorkDir falls back to workRoot (non-git dir)
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Trigger a command first to create the session in the store
+	r.Route(context.Background(), "chat1", "user1", "/ping")
+	// Now set WorkDir to empty to force fallback
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/recent")
+
+	if sender.LastMessage() == "" {
+		t.Fatal("expected some message from /recent with empty workDir")
+	}
+}
+
 func TestRouterRecent_EmptyCommits(t *testing.T) {
 	// If all commits are empty (no file changes), files list should be empty
 	dir := t.TempDir()
@@ -3743,5 +3763,161 @@ func TestMinInt(t *testing.T) {
 	}
 	if minInt(5, 5, 5) != 5 {
 		t.Fatal("expected 5")
+	}
+}
+
+// --- /clean tests ---
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "Test"},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Run()
+	}
+}
+
+func TestRouterClean_NoUntracked(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/clean")
+
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "没有") {
+		t.Fatalf("expected 'nothing to clean' message, got: %q", msg)
+	}
+}
+
+func TestRouterClean_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	// Create an untracked file
+	os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("hello"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/clean")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card showing files to be deleted")
+	}
+	card := sender.cards[0]
+	if card.Template != "orange" {
+		t.Fatalf("expected orange warning card, got: %q", card.Template)
+	}
+	if !strings.Contains(card.Content, "untracked.txt") {
+		t.Fatalf("expected untracked.txt in card content, got: %q", card.Content)
+	}
+	if !strings.Contains(card.Content, "-f") {
+		t.Fatalf("expected hint about -f in card content, got: %q", card.Content)
+	}
+}
+
+func TestRouterClean_Force(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	// Create an untracked file to be cleaned
+	os.WriteFile(filepath.Join(dir, "toclean.txt"), []byte("bye"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/clean -f")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a result card after force clean")
+	}
+	card := sender.cards[0]
+	if card.Template == "red" {
+		t.Fatalf("expected success card, got error: %q", card.Content)
+	}
+	// Verify the file was actually deleted
+	if _, err := os.Stat(filepath.Join(dir, "toclean.txt")); !os.IsNotExist(err) {
+		t.Fatal("expected toclean.txt to be deleted after /clean -f")
+	}
+}
+
+func TestRouterClean_ForceAlias(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	os.WriteFile(filepath.Join(dir, "toclean2.txt"), []byte("bye"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/clean --force")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a result card")
+	}
+	if sender.cards[0].Template == "red" {
+		t.Fatalf("expected success, got error: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterClean_ForceNoFiles(t *testing.T) {
+	// Force clean when there's nothing to clean → should show "没有需要清理的文件"
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	// No untracked files
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/clean -f")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card")
+	}
+	card := sender.cards[0]
+	if !strings.Contains(card.Content, "没有") {
+		t.Fatalf("expected 'nothing to clean' content, got: %q", card.Content)
+	}
+}
+
+func TestRouterClean_DefaultWorkDir(t *testing.T) {
+	// When WorkDir is "" it falls back to WorkRoot
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	os.WriteFile(filepath.Join(dir, "untracked_def.txt"), []byte("x"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Route once to create session, then clear WorkDir to force fallback to WorkRoot
+	r.Route(context.Background(), "chat1", "user1", "/ping")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	sender.cards = nil // reset
+
+	r.Route(context.Background(), "chat1", "user1", "/clean")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card showing untracked files via WorkRoot fallback")
+	}
+	if sender.cards[0].Template != "orange" {
+		t.Fatalf("expected orange card, got: %q", sender.cards[0].Template)
 	}
 }
