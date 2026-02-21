@@ -371,7 +371,8 @@ func (r *Router) cmdKill(ctx context.Context, chatID string) {
 
 func (r *Router) cmdModel(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "Current model: "+r.executor.Model())
+		session := r.getSession(chatID)
+		r.sender.SendText(ctx, chatID, "Current model: "+session.Model)
 		return
 	}
 	r.getSession(chatID) // ensure session exists

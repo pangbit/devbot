@@ -568,6 +568,19 @@ func TestRouterModelShowCurrent(t *testing.T) {
 	if !strings.Contains(msg, "Current model:") {
 		t.Fatalf("expected current model, got: %q", msg)
 	}
+	if !strings.Contains(msg, "sonnet") {
+		t.Fatalf("expected default model 'sonnet', got: %q", msg)
+	}
+}
+
+func TestRouterModelShowCurrentAfterChange(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/model opus")
+	r.Route(context.Background(), "chat1", "user1", "/model")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "opus") {
+		t.Fatalf("expected 'opus' after model change, got: %q", msg)
+	}
 }
 
 func TestRouterLast_WithOutput(t *testing.T) {

@@ -32,6 +32,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("DEVBOT_APP_ID", "cli_test")
 	t.Setenv("DEVBOT_APP_SECRET", "secret")
 	t.Setenv("DEVBOT_ALLOWED_USER_IDS", "user1,user2")
+	t.Setenv("DEVBOT_CLAUDE_TIMEOUT", "")
+	t.Setenv("DEVBOT_CLAUDE_PATH", "")
+	t.Setenv("DEVBOT_CLAUDE_MODEL", "")
+	t.Setenv("DEVBOT_WORK_ROOT", "")
+	t.Setenv("DEVBOT_STATE_FILE", "")
+	t.Setenv("DEVBOT_SKIP_BOT_SELF", "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
