@@ -143,6 +143,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdGrep(ctx, chatID, args)
 	case "/pr":
 		r.cmdPR(ctx, chatID, args)
+	case "/compact":
+		r.cmdCompact(ctx, chatID)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/file":
@@ -177,6 +179,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/retry`  重试上一条发给 Claude 的消息\n" +
 		"`/last`  显示上次输出\n" +
 		"`/summary`  让 Claude 总结上次输出\n" +
+		"`/compact`  压缩当前对话上下文（节省 token，延长会话）\n" +
 		"`/model [name]`  查看/切换模型（haiku/sonnet/opus）\n" +
 		"`/yolo`  开启无限制模式（Claude 可执行所有操作）\n" +
 		"`/safe`  恢复安全模式\n\n" +
@@ -631,6 +634,12 @@ func (r *Router) cmdPR(ctx context.Context, chatID, args string) {
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+func (r *Router) cmdCompact(ctx context.Context, chatID string) {
+	r.getSession(chatID) // ensure session exists
+	prompt := "Please summarize our conversation so far into a concise context summary. Include: current task, key decisions made, files modified, and next steps. Keep it brief (under 300 words). This will help continue our work efficiently."
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -705,7 +714,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
 	"/undo", "/stash",
-	"/grep", "/sh", "/file",
+	"/grep", "/sh", "/file", "/compact",
 	"/doc",
 }
 

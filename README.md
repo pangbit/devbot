@@ -211,6 +211,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/safe` — 恢复安全模式
 - `/last` — 显示上次 Claude 输出
 - `/summary` — 让 Claude 总结上次输出
+- `/compact` — 压缩当前对话上下文（节省 token，延长会话生命周期）
 
 **搜索与文件：**
 - `/grep <pattern>` — 在代码中搜索关键词（支持多种文件类型）

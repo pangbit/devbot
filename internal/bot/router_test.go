@@ -2115,6 +2115,22 @@ func TestRouterStatus_WhenRunning(t *testing.T) {
 	<-done
 }
 
+// TestRouterCompact verifies that /compact sends a summarization prompt to Claude.
+func TestRouterCompact(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/compact")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /compact to trigger execution, got: %v", msgs)
+	}
+}
+
 // TestRouterInfo_WhenRunning verifies that /info shows "执行中" when executor is busy.
 func TestRouterInfo_WhenRunning(t *testing.T) {
 	dir := t.TempDir()
