@@ -133,6 +133,10 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdRemote(ctx, chatID, args)
 	case "/tag":
 		r.cmdTag(ctx, chatID, args)
+	case "/prs":
+		r.cmdPRList(ctx, chatID, args)
+	case "/issues":
+		r.cmdIssues(ctx, chatID, args)
 	case "/stash":
 		r.cmdStash(ctx, chatID, args)
 	case "/log":
@@ -225,6 +229,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/pull [args]`  从远程拉取（即时响应）\n" +
 		"`/push [args]`  推送到远程（即时响应）\n" +
 		"`/pr [title]`  创建 Pull Request（即时响应，使用 gh --fill 自动填充）\n" +
+		"`/prs [all]`  查看 PR 列表（默认开放中，加 all 显示全部）\n" +
+		"`/issues [args]`  查看 Issue 列表\n" +
 		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/clean [-f]`  查看/清理未跟踪文件（默认预览，加 -f 确认删除）\n" +
@@ -1617,6 +1623,79 @@ func (r *Router) cmdTag(ctx context.Context, chatID, args string) {
 	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 标签已创建: %s", args))
 }
 
+func (r *Router) cmdPRList(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Default: show open PRs; with "all", show all
+	ghArgs := []string{"pr", "list", "--limit", "20"}
+	if args == "all" {
+		ghArgs = append(ghArgs, "--state", "all")
+	} else if args != "" {
+		ghArgs = append(ghArgs, strings.Fields(args)...)
+	}
+
+	cmd := exec.CommandContext(execCtx, "gh", ghArgs...)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+
+	if err != nil {
+		content := output
+		if content == "" {
+			content = err.Error()
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "获取 PR 列表出错", Content: content, Template: "red"})
+		return
+	}
+	if output == "" {
+		r.sender.SendText(ctx, chatID, "没有开放中的 Pull Request。")
+		return
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Pull Requests", Content: "```\n" + output + "\n```"})
+}
+
+func (r *Router) cmdIssues(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	ghArgs := []string{"issue", "list", "--limit", "20"}
+	if args != "" {
+		ghArgs = append(ghArgs, strings.Fields(args)...)
+	}
+
+	cmd := exec.CommandContext(execCtx, "gh", ghArgs...)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+
+	if err != nil {
+		content := output
+		if content == "" {
+			content = err.Error()
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "获取 Issues 出错", Content: content, Template: "red"})
+		return
+	}
+	if output == "" {
+		r.sender.SendText(ctx, chatID, "没有开放中的 Issue。")
+		return
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "Issues", Content: "```\n" + output + "\n```"})
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -1813,7 +1892,7 @@ var knownCommands = []string{
 	"/pwd", "/ls", "/root", "/cd",
 	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
 	"/last", "/summary", "/model", "/yolo", "/safe",
-	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
+	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr", "/prs", "/issues",
 	"/undo", "/stash", "/clean", "/remote", "/tag",
 	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/size", "/stats", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",

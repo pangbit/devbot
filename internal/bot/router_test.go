@@ -4328,3 +4328,37 @@ func TestRouterTag_CreateTag(t *testing.T) {
 		t.Fatalf("expected success message for /tag create, got: %q", sender.LastMessage())
 	}
 }
+
+// --- /prs and /issues tests ---
+
+func TestRouterPRList_GhError(t *testing.T) {
+	// gh not available or not in git repo — should return error card or no-PR message
+	r, _ := newTestRouter(t)
+	sender := &cardSpySender{}
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r = NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	_ = r
+
+	r.Route(context.Background(), "chat1", "user1", "/prs")
+
+	// Some response must come back (error or empty)
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /prs")
+	}
+}
+
+func TestRouterIssues_GhError(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/issues")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /issues")
+	}
+}
