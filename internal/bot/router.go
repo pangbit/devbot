@@ -150,7 +150,11 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 	case "/doc":
 		r.cmdDoc(ctx, chatID, args)
 	default:
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("未知命令: %s\n\n使用 /help 查看所有可用命令。", cmd))
+		msg := fmt.Sprintf("未知命令: %s\n\n使用 /help 查看所有可用命令。", cmd)
+		if suggestion := suggestCommand(cmd); suggestion != "" {
+			msg = fmt.Sprintf("未知命令: %s\n\n你是否想用 `%s`？\n\n使用 /help 查看完整命令列表。", cmd, suggestion)
+		}
+		r.sender.SendText(ctx, chatID, msg)
 	}
 }
 
@@ -691,6 +695,69 @@ func gitStatusSummary(workDir string) string {
 	}
 	lines := strings.Split(output, "\n")
 	return fmt.Sprintf("%d 个文件变更", len(lines))
+}
+
+// knownCommands is the authoritative list of all supported slash commands.
+var knownCommands = []string{
+	"/help", "/ping", "/version", "/status", "/info",
+	"/pwd", "/ls", "/root", "/cd",
+	"/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
+	"/last", "/summary", "/model", "/yolo", "/safe",
+	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
+	"/undo", "/stash",
+	"/grep", "/sh", "/file",
+	"/doc",
+}
+
+// suggestCommand returns the known command closest to unknown (Levenshtein ≤ 3),
+// or empty string if no good match exists.
+func suggestCommand(unknown string) string {
+	best := ""
+	bestDist := 4 // only suggest if edit distance < 4
+	for _, cmd := range knownCommands {
+		d := levenshtein(unknown, cmd)
+		if d < bestDist {
+			bestDist = d
+			best = cmd
+		}
+	}
+	return best
+}
+
+// levenshtein computes the edit distance between strings a and b.
+func levenshtein(a, b string) int {
+	la, lb := len(a), len(b)
+	dp := make([]int, lb+1)
+	for j := range dp {
+		dp[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		prev := dp[0]
+		dp[0] = i
+		for j := 1; j <= lb; j++ {
+			tmp := dp[j]
+			if a[i-1] == b[j-1] {
+				dp[j] = prev
+			} else {
+				dp[j] = 1 + minInt(prev, dp[j], dp[j-1])
+			}
+			prev = tmp
+		}
+	}
+	return dp[lb]
+}
+
+func minInt(a, b, c int) int {
+	if a < b {
+		if a < c {
+			return a
+		}
+		return c
+	}
+	if b < c {
+		return b
+	}
+	return c
 }
 
 // underRoot reports whether path is equal to root or is directly under it.

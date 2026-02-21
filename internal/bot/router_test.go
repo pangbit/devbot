@@ -1857,6 +1857,66 @@ func TestRouterUndo_WithChanges(t *testing.T) {
 	}
 }
 
+// --- suggestCommand / levenshtein tests ---
+
+func TestLevenshtein(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"", "", 0},
+		{"abc", "abc", 0},
+		{"abc", "ab", 1},
+		{"/comit", "/commit", 1},
+		{"/statuss", "/status", 1},
+		{"/helo", "/help", 1},
+		{"/xyz", "/status", 6},
+	}
+	for _, tt := range tests {
+		got := levenshtein(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("levenshtein(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func TestSuggestCommand_Typo(t *testing.T) {
+	// /comit is 1 edit from /commit
+	got := suggestCommand("/comit")
+	if got != "/commit" {
+		t.Fatalf("expected '/commit' suggestion for '/comit', got: %q", got)
+	}
+}
+
+func TestSuggestCommand_NoMatch(t *testing.T) {
+	// /xyzabc is too far from any known command
+	got := suggestCommand("/xyzabc123")
+	if got != "" {
+		t.Fatalf("expected no suggestion for '/xyzabc123', got: %q", got)
+	}
+}
+
+func TestRouterUnknownCommand_WithSuggestion(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/comit")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "你是否想用") || !strings.Contains(msg, "/commit") {
+		t.Fatalf("expected suggestion for /comit, got: %q", msg)
+	}
+}
+
+func TestRouterUnknownCommand_NoSuggestion(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/xyzabc123")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "未知命令") {
+		t.Fatalf("expected unknown command message, got: %q", msg)
+	}
+	if strings.Contains(msg, "你是否想用") {
+		t.Fatalf("should not suggest for totally unknown command, got: %q", msg)
+	}
+}
+
 // --- /version tests ---
 
 func TestRouterVersion(t *testing.T) {
@@ -1973,5 +2033,101 @@ echo '{"type":"result","result":"You need permission","is_error":false,"session_
 	if !found {
 		t.Logf("cards: %+v", sender.cards)
 		// Not a hard failure — the test mainly exercises the code path
+	}
+}
+
+// --- execClaude: large output (>4000 chars) in result ---
+
+func TestRouterExecClaude_LargeOutput(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// Generate a result with >4000 chars
+	largeOutput := strings.Repeat("x", 5000)
+	scriptBody := `#!/bin/sh
+echo '{"type":"result","result":"` + largeOutput + `","session_id":"s1"}'
+`
+	os.WriteFile(script, []byte(scriptBody), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor(script, "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "hello")
+
+	// Should have received a card with the large output (not truncated in final result)
+	found := false
+	for _, c := range sender.cards {
+		if strings.Contains(c.Content, "x") && len(c.Content) > 100 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected large output card, cards: %+v", sender.cards)
+	}
+}
+
+// --- cmdStatus when executor is running ---
+
+func TestRouterStatus_WhenRunning(t *testing.T) {
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ntouch %s\nexec sleep 30\n", readyPath)), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	snd := &spySender{}
+	ex := NewClaudeExecutor(script, "sonnet", 60*time.Second)
+	r := NewRouter(context.Background(), ex, store, snd, map[string]bool{"user1": true}, dir, nil)
+
+	// Start long-running task in background
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Route(context.Background(), "chat1", "user1", "run long task")
+	}()
+
+	// Wait for script to start
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(readyPath); err != nil {
+		t.Fatal("script did not start within 5s")
+	}
+
+	// Check status while running
+	r.Route(context.Background(), "chat1", "user1", "/status")
+	found := false
+	for _, m := range snd.messages {
+		if strings.Contains(m, "执行中") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected '执行中' in status while running, got: %v", snd.messages)
+	}
+
+	ex.Kill()
+	<-done
+}
+
+// --- minInt unit test ---
+
+func TestMinInt(t *testing.T) {
+	if minInt(1, 2, 3) != 1 {
+		t.Fatal("expected 1")
+	}
+	if minInt(3, 1, 2) != 1 {
+		t.Fatal("expected 1")
+	}
+	if minInt(2, 3, 1) != 1 {
+		t.Fatal("expected 1")
+	}
+	if minInt(5, 5, 5) != 5 {
+		t.Fatal("expected 5")
 	}
 }
