@@ -1606,3 +1606,92 @@ echo '{"type":"result","result":"streamed result","session_id":"stream-sess-1"}'
 		t.Fatalf("expected LastOutput 'streamed result', got: %q", sess.LastOutput)
 	}
 }
+
+// --- /info tests ---
+
+func TestRouterInfo(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/info")
+	msg := sender.LastMessage()
+	// Should show a compact overview card
+	if !strings.Contains(msg, "当前概览") {
+		t.Fatalf("expected 当前概览 title, got: %q", msg)
+	}
+	// Should show the model
+	if !strings.Contains(msg, "sonnet") {
+		t.Fatalf("expected model in /info output, got: %q", msg)
+	}
+}
+
+// --- /grep tests ---
+
+func TestRouterGrep_EmptyArgs(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/grep")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "用法") {
+		t.Fatalf("expected usage message for /grep with no args, got: %q", msg)
+	}
+}
+
+func TestRouterGrep_WithPattern(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/grep TODO")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /grep to trigger execution, got: %v", msgs)
+	}
+}
+
+// --- /pr tests ---
+
+func TestRouterPR_NoTitle(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/pr")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /pr to trigger execution, got: %v", msgs)
+	}
+}
+
+func TestRouterPR_WithTitle(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/pr feat: add new feature")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /pr with title to trigger execution, got: %v", msgs)
+	}
+}
+
+// --- /status git info tests ---
+
+func TestRouterStatus_ShowsGitFields(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/status")
+	msg := sender.LastMessage()
+	// Should now include git branch and workspace fields
+	if !strings.Contains(msg, "Git 分支") {
+		t.Fatalf("expected 'Git 分支' in status, got: %q", msg)
+	}
+	if !strings.Contains(msg, "工作区") {
+		t.Fatalf("expected '工作区' in status, got: %q", msg)
+	}
+}

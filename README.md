@@ -16,6 +16,10 @@
 - `/retry` 一键重试上一条请求，无需重新输入
 - `/commit` 无需提交信息，Claude 自动生成
 - `/branch` 分支创建/切换快捷命令
+- `/info` 快速概览当前状态（目录 + git 分支 + 变更 + 运行状态）
+- `/pr` 一键创建 Pull Request（Claude 自动生成描述）
+- `/grep` 代码关键词搜索，覆盖主流文件类型
+- `/status` 增强：实时显示 git 分支和工作区变更数量
 
 ## 环境要求
 
@@ -174,7 +178,8 @@ tail -f /opt/devbot/devbot.log # 文件日志
 **基础：**
 - `/help` — 显示所有命令
 - `/ping` — 检查机器人在线状态和运行时长
-- `/status` — 当前状态（工作目录、会话、模型、执行统计）
+- `/info` — 快速概览（目录、分支、工作区变更、模型、运行状态）
+- `/status` — 详细状态（含 git 分支、变更信息、执行统计）
 
 **目录：**
 - `/root [path]` — 查看/设置工作根目录（必须为绝对路径）
@@ -189,6 +194,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/branch [name]` — 查看分支列表，或创建/切换分支
 - `/commit [msg]` — 提交变更（不填消息则 Claude 自动生成）
 - `/push` — 推送到远程
+- `/pr [title]` — 创建 Pull Request（使用 gh CLI）
 - `/undo` — 撤销所有未提交的更改
 - `/stash [pop]` — 暂存/恢复更改
 
@@ -206,7 +212,8 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/last` — 显示上次 Claude 输出
 - `/summary` — 让 Claude 总结上次输出
 
-**系统：**
+**搜索与文件：**
+- `/grep <pattern>` — 在代码中搜索关键词（支持多种文件类型）
 - `/sh <cmd>` — 通过 Claude 执行 Shell 命令
 - `/file <path>` — 发送项目文件内容到聊天
 

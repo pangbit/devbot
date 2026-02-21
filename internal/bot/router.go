@@ -1,10 +1,12 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -131,6 +133,12 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdKill(ctx, chatID)
 	case "/retry":
 		r.cmdRetry(ctx, chatID)
+	case "/info":
+		r.cmdInfo(ctx, chatID)
+	case "/grep":
+		r.cmdGrep(ctx, chatID, args)
+	case "/pr":
+		r.cmdPR(ctx, chatID, args)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/file":
@@ -148,12 +156,13 @@ func (r *Router) getSession(chatID string) Session {
 
 func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 	md := "**🗺 导航:**\n" +
+		"`/info`  快速概览（目录、分支、变更、状态）\n" +
 		"`/root [path]`  查看/设置根工作目录\n" +
 		"`/cd <dir>`  切换项目目录（支持相对路径）\n" +
 		"`/pwd`  显示当前目录\n" +
 		"`/ls`  列出根目录下的项目\n\n" +
 		"**🤖 Claude 对话:**\n" +
-		"`/status`  查看当前会话状态\n" +
+		"`/status`  查看详细状态（含 git 信息）\n" +
 		"`/new`  开启新对话（保留当前会话到历史）\n" +
 		"`/kill`  终止正在执行的任务\n" +
 		"`/cancel`  同 /kill，终止当前任务\n" +
@@ -172,10 +181,12 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/branch [name]`  查看分支列表或切换/创建分支\n" +
 		"`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
 		"`/push`  推送到远程\n" +
+		"`/pr [title]`  创建 Pull Request\n" +
 		"`/undo`  撤销所有未提交的更改\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/git <args>`  执行任意 git 命令\n\n" +
-		"**📁 文件:**\n" +
+		"**📁 文件与搜索:**\n" +
+		"`/grep <pattern>`  在代码中搜索关键词\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/sh <cmd>`  通过 Claude 执行 Shell 命令\n\n" +
 		"**📄 飞书文档同步:**\n" +
@@ -223,8 +234,19 @@ func (r *Router) cmdStatus(ctx context.Context, chatID string) {
 	if sessionStr == "" {
 		sessionStr = "（新会话）"
 	}
-	md := fmt.Sprintf("**工作目录:** `%s`\n**会话 ID:**   `%s`\n**模型:**      %s\n**模式:**      %s\n**状态:**      %s\n**执行次数:** %d\n**上次耗时:** %s\n**待执行队列:** %d\n**运行时长:** %s",
+	branch := gitBranch(session.WorkDir)
+	branchStr := branch
+	if branchStr == "" {
+		branchStr = "（非 git 目录）"
+	}
+	changes := gitStatusSummary(session.WorkDir)
+	if changes == "" {
+		changes = "（非 git 目录）"
+	}
+	md := fmt.Sprintf("**工作目录:** `%s`\n**Git 分支:**  %s\n**工作区:**    %s\n**会话 ID:**   `%s`\n**模型:**      %s\n**模式:**      %s\n**状态:**      %s\n**执行次数:** %d\n**上次耗时:** %s\n**待执行队列:** %d\n**运行时长:** %s",
 		session.WorkDir,
+		branchStr,
+		changes,
 		sessionStr,
 		session.Model,
 		mode,
@@ -541,6 +563,50 @@ func (r *Router) cmdRetry(ctx context.Context, chatID string) {
 	r.execClaudeQueued(ctx, chatID, session.LastPrompt)
 }
 
+func (r *Router) cmdInfo(ctx context.Context, chatID string) {
+	session := r.getSession(chatID)
+	mode := session.PermissionMode
+	if mode == "" {
+		mode = "safe"
+	}
+	branch := gitBranch(session.WorkDir)
+	if branch == "" {
+		branch = "（非 git 目录）"
+	}
+	changes := gitStatusSummary(session.WorkDir)
+	if changes == "" {
+		changes = "（非 git 目录）"
+	}
+	runningStr := "空闲"
+	if r.executor.IsRunning() {
+		runningStr = "执行中..."
+	}
+	md := fmt.Sprintf("📂 `%s`\n🌿 %s | 📝 %s\n🤖 %s | 🔒 %s | ⚡ %s",
+		session.WorkDir, branch, changes, session.Model, mode, runningStr)
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: "当前概览", Content: md})
+}
+
+func (r *Router) cmdGrep(ctx context.Context, chatID, args string) {
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "用法: /grep <关键词>\n示例: /grep TODO\n示例: /grep func main")
+		return
+	}
+	r.getSession(chatID) // ensure session exists
+	prompt := fmt.Sprintf("Run `grep -rn --include='*.go' --include='*.ts' --include='*.py' --include='*.js' -l %q .` in the current directory, then show the top matching lines. Only show the command output, no explanation.", args)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
+func (r *Router) cmdPR(ctx context.Context, chatID, args string) {
+	r.getSession(chatID) // ensure session exists
+	var prompt string
+	if args == "" {
+		prompt = "Create a pull request using `gh pr create` with an auto-generated title and body based on the current branch changes. Only show the PR URL in the output, no extra explanation."
+	} else {
+		prompt = fmt.Sprintf("Create a pull request using `gh pr create --title %q` with an auto-generated body based on the current branch changes. Only show the PR URL in the output, no extra explanation.", args)
+	}
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -568,6 +634,43 @@ func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 		return
 	}
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: filepath.Base(target), Content: "```\n" + string(data) + "\n```"})
+}
+
+// gitBranch returns the current git branch name in workDir, or empty on error.
+func gitBranch(workDir string) string {
+	if workDir == "" {
+		return ""
+	}
+	var out bytes.Buffer
+	cmd := exec.Command("git", "-C", workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(out.String())
+	if branch == "HEAD" {
+		return "" // detached HEAD — not useful to show
+	}
+	return branch
+}
+
+// gitStatusSummary returns a brief summary of working tree changes, or empty on error.
+func gitStatusSummary(workDir string) string {
+	if workDir == "" {
+		return ""
+	}
+	var out bytes.Buffer
+	cmd := exec.Command("git", "-C", workDir, "status", "--porcelain")
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	output := strings.TrimSpace(out.String())
+	if output == "" {
+		return "无变更"
+	}
+	lines := strings.Split(output, "\n")
+	return fmt.Sprintf("%d 个文件变更", len(lines))
 }
 
 // underRoot reports whether path is equal to root or is directly under it.
