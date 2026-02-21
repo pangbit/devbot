@@ -4184,3 +4184,59 @@ func TestRouterStats_EmptyDir(t *testing.T) {
 		t.Fatal("expected some response from /stats on empty dir")
 	}
 }
+
+func TestRouterFile_WithLineNumber(t *testing.T) {
+	dir := t.TempDir()
+	// Create a file with many lines
+	var lines []string
+	for i := 1; i <= 150; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	os.WriteFile(filepath.Join(dir, "big.go"), []byte(strings.Join(lines, "\n")), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Request line 100 — should show around that line
+	r.Route(context.Background(), "chat1", "user1", "/file big.go:100")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /file big.go:100")
+	}
+	content := sender.cards[0].Content
+	// Should contain line 100
+	if !strings.Contains(content, "100") {
+		t.Fatalf("expected line 100 in output, got: %q", content[:200])
+	}
+	// Should show line numbers
+	if !strings.Contains(content, "  ") {
+		t.Fatalf("expected line number formatting, got: %q", content[:200])
+	}
+}
+
+func TestRouterFile_LargeFile_Truncated(t *testing.T) {
+	dir := t.TempDir()
+	var lines []string
+	for i := 1; i <= 200; i++ {
+		lines = append(lines, fmt.Sprintf("line content %d", i))
+	}
+	os.WriteFile(filepath.Join(dir, "large.go"), []byte(strings.Join(lines, "\n")), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/file large.go")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /file large.go")
+	}
+	title := sender.cards[0].Title
+	// Large file should mention line range in title
+	if !strings.Contains(title, "行") {
+		t.Fatalf("expected line range info in title for large file, got: %q", title)
+	}
+}

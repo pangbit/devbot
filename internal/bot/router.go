@@ -235,7 +235,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/size [path]`  查看文件或目录的磁盘占用大小\n" +
 		"`/stats`  项目统计：文件数、代码行数、文件类型分布、最近提交\n" +
 		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
-		"`/file <path>`  查看项目文件内容\n" +
+		"`/file <path>[:<行号>]`  查看文件内容（显示行号，大文件自动截断，支持 :行号 跳转）\n" +
 		"`/exec <cmd>`  直接执行 Shell 命令（即时返回，无需 Claude）\n" +
 		"`/sh <cmd>`  通过 Claude 执行 Shell 命令（带 AI 解释）\n\n" +
 		"**📄 飞书文档同步:**\n" +
@@ -1623,13 +1623,26 @@ func (r *Router) cmdExec(ctx context.Context, chatID, args string) {
 
 func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "用法: /file <文件路径>\n示例: /file README.md\n示例: /file src/main.go")
+		r.sender.SendText(ctx, chatID, "用法: /file <文件路径>[:<行号>]\n示例: /file README.md\n示例: /file src/main.go:50")
 		return
 	}
+	// Parse optional line hint: /file path:lineNum
+	filePart := args
+	startLine := 0
+	if idx := strings.LastIndex(args, ":"); idx > 0 {
+		// Check if the part after : is a number
+		possible := args[idx+1:]
+		if n, err := fmt.Sscanf(possible, "%d", &startLine); err == nil && n == 1 && startLine > 0 {
+			filePart = args[:idx]
+		} else {
+			startLine = 0
+		}
+	}
+
 	session := r.getSession(chatID)
-	target := findFile(session.WorkDir, args)
+	target := findFile(session.WorkDir, filePart)
 	if target == "" {
-		r.sender.SendText(ctx, chatID, fmt.Sprintf("文件不存在: %s", args))
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("文件不存在: %s", filePart))
 		return
 	}
 	data, err := os.ReadFile(target)
@@ -1637,7 +1650,43 @@ func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("读取文件出错: %v", err))
 		return
 	}
-	r.sender.SendCard(ctx, chatID, CardMsg{Title: filepath.Base(target), Content: "```\n" + string(data) + "\n```"})
+
+	allLines := strings.Split(string(data), "\n")
+	totalLines := len(allLines)
+	const windowSize = 80
+	const maxDisplayLines = 100
+
+	// Determine display range
+	firstLine := 1
+	if startLine > 0 {
+		// Center the window around the requested line
+		firstLine = startLine - windowSize/2
+		if firstLine < 1 {
+			firstLine = 1
+		}
+	}
+	lastLine := firstLine + maxDisplayLines - 1
+	if lastLine > totalLines {
+		lastLine = totalLines
+	}
+
+	displayLines := allLines[firstLine-1 : lastLine]
+	var sb strings.Builder
+	for i, line := range displayLines {
+		sb.WriteString(fmt.Sprintf("%4d  %s\n", firstLine+i, line))
+	}
+	output := strings.TrimRight(sb.String(), "\n")
+
+	title := filepath.Base(target)
+	subtitle := ""
+	if totalLines > maxDisplayLines {
+		subtitle = fmt.Sprintf("（显示第 %d–%d 行，共 %d 行）", firstLine, lastLine, totalLines)
+	}
+	if subtitle != "" {
+		title += "  " + subtitle
+	}
+
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + output + "\n```"})
 }
 
 // gitBranch returns the current git branch name in workDir, or empty on error.

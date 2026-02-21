@@ -231,7 +231,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/debug` — 分析上次输出中的错误并给出修复建议
 - `/exec <cmd>` — 直接执行 Shell 命令（即时返回，无需 Claude，适合 `ls`、`make`、`go test` 等）
 - `/sh <cmd>` — 通过 Claude 执行 Shell 命令（带 AI 解释）
-- `/file <path>` — 发送项目文件内容到聊天
+- `/file <path>[:<行号>]` — 查看文件内容（显示行号，大文件自动截断，加 `:行号` 可跳转到指定行）
 
 **飞书文档同步：**
 - `/doc push <path>` — 将 Markdown 文件推送到飞书文档
