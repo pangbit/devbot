@@ -4104,3 +4104,42 @@ func TestRouterTree_EmptyDir(t *testing.T) {
 		t.Fatal("expected some response from /tree on empty dir")
 	}
 }
+
+// --- /size tests ---
+
+func TestRouterSize_CurrentDir(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "bigfile.txt"), make([]byte, 1024), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/size")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /size")
+	}
+	if !strings.Contains(sender.cards[0].Content, "总计") {
+		t.Fatalf("expected size info in card, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterSize_WithPath(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "sub")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "file.go"), []byte("package main"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/size sub")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /size sub")
+	}
+}

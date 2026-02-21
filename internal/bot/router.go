@@ -163,6 +163,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdDebug(ctx, chatID)
 	case "/tree":
 		r.cmdTree(ctx, chatID, args)
+	case "/size":
+		r.cmdSize(ctx, chatID, args)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/exec":
@@ -228,6 +230,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/todo`  搜索代码中的 TODO/FIXME/HACK/BUG 注释\n" +
 		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
 		"`/tree [dir]`  显示目录结构（最多 2 层深度，优先使用系统 tree 命令）\n" +
+		"`/size [path]`  查看文件或目录的磁盘占用大小\n" +
 		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/exec <cmd>`  直接执行 Shell 命令（即时返回，无需 Claude）\n" +
@@ -1393,6 +1396,51 @@ func (r *Router) cmdTree(ctx context.Context, chatID, args string) {
 	})
 }
 
+func (r *Router) cmdSize(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	targetDir := workDir
+	if args != "" {
+		if filepath.IsAbs(args) {
+			targetDir = args
+		} else {
+			targetDir = filepath.Join(workDir, args)
+		}
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// du -sh: summarize size of target; du -sh *: breakdown of top-level entries
+	cmd := exec.CommandContext(execCtx, "du", "-sh", targetDir)
+	out, err := cmd.Output()
+	summary := strings.TrimSpace(string(out))
+
+	// Also show breakdown of top-level items
+	cmd2 := exec.CommandContext(execCtx, "du", "-sh", filepath.Join(targetDir, "*"))
+	cmd2.Dir = targetDir
+	out2, _ := cmd2.Output()
+	breakdown := strings.TrimSpace(string(out2))
+
+	if err != nil || summary == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("无法获取 %s 的大小信息。", targetDir))
+		return
+	}
+
+	content := "**总计:** " + strings.Fields(summary)[0]
+	if breakdown != "" {
+		content += "\n\n**详细:**\n```\n" + breakdown + "\n```"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("磁盘占用: %s", filepath.Base(targetDir)),
+		Content: content,
+	})
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -1542,7 +1590,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
 	"/undo", "/stash", "/clean",
-	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/debug", "/sh", "/exec", "/file", "/compact",
+	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/size", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }
 
