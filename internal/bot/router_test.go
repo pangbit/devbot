@@ -237,6 +237,30 @@ func TestRouterCdPathTraversal(t *testing.T) {
 	}
 }
 
+func TestUnderRoot(t *testing.T) {
+	tests := []struct {
+		root string
+		path string
+		want bool
+	}{
+		{"/home/user", "/home/user", true},
+		{"/home/user", "/home/user/proj", true},
+		{"/home/user", "/home/user/proj/sub", true},
+		{"/home/user", "/home/user2", false},   // sibling dir starting with same name
+		{"/home/user", "/home/user2/x", false}, // path under sibling dir
+		{"/home/user", "/home", false},
+		{"/home/user", "/etc/passwd", false},
+		{"", "/home", false},
+		{"/home", "", false},
+	}
+	for _, tt := range tests {
+		got := underRoot(tt.root, tt.path)
+		if got != tt.want {
+			t.Errorf("underRoot(%q, %q) = %v, want %v", tt.root, tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestRouterRouteImageSavesAndSendsPrompt(t *testing.T) {
 	r, sender := newTestRouter(t)
 	imgData := []byte("fake-image-data")

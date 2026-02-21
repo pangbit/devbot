@@ -289,7 +289,7 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 	target = filepath.Clean(target)
 
 	// Prevent path traversal outside work root
-	if !strings.HasPrefix(target, root) {
+	if !underRoot(root, target) {
 		r.sender.SendText(ctx, chatID, "Cannot cd outside of work root: "+root)
 		return
 	}
@@ -465,6 +465,19 @@ func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 	r.sender.SendCard(ctx, chatID, CardMsg{Title: filepath.Base(target), Content: "```\n" + string(data) + "\n```"})
 }
 
+// underRoot reports whether path is equal to root or is directly under it.
+// It handles the edge case where root="/a/b" and path="/a/b2/..." would
+// incorrectly pass a naive strings.HasPrefix check.
+func underRoot(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
 func findFile(workDir, query string) string {
 	if filepath.IsAbs(query) {
 		return "" // Don't allow absolute paths
@@ -579,7 +592,7 @@ func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) {
 	}
 
 	root := r.store.WorkRoot()
-	if !strings.HasPrefix(filePath, root) {
+	if !underRoot(root, filePath) {
 		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
 		return
 	}
@@ -624,7 +637,7 @@ func (r *Router) cmdDocPull(ctx context.Context, chatID, args string) {
 	}
 
 	root := r.store.WorkRoot()
-	if !strings.HasPrefix(filePath, root) {
+	if !underRoot(root, filePath) {
 		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
 		return
 	}
@@ -658,7 +671,7 @@ func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) {
 	}
 
 	root := r.store.WorkRoot()
-	if !strings.HasPrefix(filePath, root) {
+	if !underRoot(root, filePath) {
 		r.sender.SendText(ctx, chatID, "Cannot access files outside work root: "+root)
 		return
 	}
