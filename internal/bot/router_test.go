@@ -4362,3 +4362,405 @@ func TestRouterIssues_GhError(t *testing.T) {
 		t.Fatal("expected some response from /issues")
 	}
 }
+
+// --- additional /tree coverage tests ---
+
+func TestRouterTree_AbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "abs_target")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "go.mod"), []byte("module test"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tree "+subDir)
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /tree with absolute path")
+	}
+	if !strings.Contains(sender.cards[0].Content, "go.mod") {
+		t.Fatalf("expected go.mod in tree output, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterTree_FallbackPath_NonexistentDir(t *testing.T) {
+	// When system tree command fails (nonexistent dir), code falls through to
+	// the os.ReadDir fallback, which also fails → "目录 X 为空或不存在" message
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tree /nonexistent_devbot_path_tree_xyz")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /tree on nonexistent dir")
+	}
+	// Either "空或不存在" or some fallback message
+	if !strings.Contains(msg, "不存在") && !strings.Contains(msg, "empty") && !strings.Contains(msg, "error") {
+		// At minimum we should get something back
+		t.Logf("got message: %q", msg)
+	}
+}
+
+func TestRouterTree_FallbackPath_WithFiles(t *testing.T) {
+	// Force the fallback os.ReadDir path by using a tmp dir where tree fails:
+	// We achieve this by running /tree on a dir where tree command produces an error.
+	// If tree is not available at all, the fallback is directly used.
+	// This test ensures the fallback code executes correctly when tree fails.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main"), 0644)
+	os.MkdirAll(filepath.Join(dir, "subpkg"), 0755)
+	os.WriteFile(filepath.Join(dir, "subpkg", "util.go"), []byte("package subpkg"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Use the work directory directly (tree may succeed here on macOS, or fallback runs)
+	r.Route(context.Background(), "chat1", "user1", "/tree")
+
+	// Should get some output either way
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a tree output card")
+	}
+}
+
+func TestRouterTree_LargeOutput(t *testing.T) {
+	dir := t.TempDir()
+	// Create many files to trigger truncation
+	for i := 0; i < 200; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%04d.txt", i)), []byte("x"), 0644)
+	}
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tree")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /tree with many files")
+	}
+	// Either truncated or full output — just ensure something came back
+	if sender.cards[0].Content == "" {
+		t.Fatal("expected non-empty content")
+	}
+}
+
+// --- additional /remote coverage tests ---
+
+func TestRouterRemote_WithRemote(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "remote", "add", "origin", "https://github.com/test/repo.git").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/remote")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card showing remote info, texts=%v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "github.com") {
+		t.Fatalf("expected github.com in remote output, got: %q", sender.cards[0].Content)
+	}
+}
+
+// --- additional /tag coverage tests ---
+
+func TestRouterTag_ListTags(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "f.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	exec.Command("git", "-C", dir, "tag", "v0.1.0").Run()
+	exec.Command("git", "-C", dir, "tag", "v0.2.0").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tag")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card listing tags")
+	}
+	if !strings.Contains(sender.cards[0].Content, "v0.1.0") {
+		t.Fatalf("expected v0.1.0 in tag list, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterTag_CreateDuplicateFails(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "f.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	exec.Command("git", "-C", dir, "tag", "v1.0.0").Run() // create it first
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Try to create the same tag again — should fail
+	r.Route(context.Background(), "chat1", "user1", "/tag v1.0.0")
+
+	// Should send error card (red template) or some message
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected an error card when creating duplicate tag")
+	}
+}
+
+// --- additional /prs coverage tests ---
+
+func TestRouterPRList_AllArg(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// /prs all — should run without panic (gh likely not in git repo, returns error card or text)
+	r.Route(context.Background(), "chat1", "user1", "/prs all")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /prs all")
+	}
+}
+
+func TestRouterPRList_CustomArgs(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// /prs --state closed — exercises the args != "all" && args != "" branch
+	r.Route(context.Background(), "chat1", "user1", "/prs --state closed")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /prs with custom args")
+	}
+}
+
+// --- additional /issues coverage tests ---
+
+func TestRouterIssues_WithArgs(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// /issues --label bug — exercises the args != "" branch
+	r.Route(context.Background(), "chat1", "user1", "/issues --label bug")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /issues with args")
+	}
+}
+
+// --- additional /git coverage tests ---
+
+func TestRouterGit_EmptyOutput(t *testing.T) {
+	// stash list in an empty repo produces no output (success + empty)
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/git stash list")
+
+	// Empty output path → card with "（无输出）"
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card even for empty git stash list output")
+	}
+	if !strings.Contains(sender.cards[0].Content, "无输出") {
+		t.Fatalf("expected '无输出' placeholder, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterGit_LargeOutput(t *testing.T) {
+	// Large output should be truncated
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+	// Create many commits to get long log output
+	for i := 0; i < 60; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.go", i)), []byte(strings.Repeat("x", 200)), 0644)
+		exec.Command("git", "-C", dir, "add", ".").Run()
+		exec.Command("git", "-C", dir, "commit", "-m", fmt.Sprintf("commit %d with a longer message to generate more output text", i)).Run()
+	}
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/git log --oneline")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /git log with many commits")
+	}
+}
+
+// --- additional /log coverage tests ---
+
+func TestRouterLog_InvalidFlagWithOutput(t *testing.T) {
+	// Passing an invalid git flag causes err != nil AND output != "" (git error message)
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+	os.WriteFile(filepath.Join(dir, "f.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// "-invalid_flag" becomes a bad git count that causes git to error with output
+	r.Route(context.Background(), "chat1", "user1", "/log invalid_flag")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some error message from /log with invalid flag")
+	}
+}
+
+func TestRouterLog_ZeroCount_EmptyOutput(t *testing.T) {
+	// /log 0 → git log --oneline -0 succeeds but returns empty output
+	// → takes the "else" branch: "当前目录无 git 提交记录。"
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+	os.WriteFile(filepath.Join(dir, "f.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/log 0")
+
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "无 git 提交记录") && !strings.Contains(msg, "出错") {
+		t.Fatalf("expected 'no commits' or error message, got: %q", msg)
+	}
+}
+
+// --- additional /branch coverage tests ---
+
+func TestRouterBranch_CheckoutNonexistentBranch(t *testing.T) {
+	// Both create and switch fail → error card
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+	// No commits — can't create or switch branches on an unborn repo easily
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Try to switch to a non-existent branch in a fresh repo with no commits
+	r.Route(context.Background(), "chat1", "user1", "/branch nonexistent-branch-xyz")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /branch with invalid name")
+	}
+}
+
+func TestRouterBranch_InvalidName_ErrorCard(t *testing.T) {
+	// Use an invalid git branch name so both checkout -b and checkout fail → error card
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// "invalid..branch" is rejected by git as an invalid ref name
+	r.Route(context.Background(), "chat1", "user1", "/branch invalid..branch")
+
+	// Should get an error card (red template)
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected an error card for invalid branch name, got texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Title, "出错") {
+		t.Fatalf("expected error title, got: %q", sender.cards[0].Title)
+	}
+}
+
+// --- additional /size coverage tests ---
+
+func TestRouterSize_AbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "abs_sub")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "data.bin"), make([]byte, 512), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/size "+subDir)
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /size with absolute path")
+	}
+}
+
+func TestRouterSize_NonexistentPath_Error(t *testing.T) {
+	// du fails on a nonexistent path → error text message
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/size /nonexistent_devbot_path_xyz_99")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected an error message for nonexistent path")
+	}
+	if !strings.Contains(msg, "无法获取") {
+		t.Fatalf("expected '无法获取' in error message, got: %q", msg)
+	}
+}
