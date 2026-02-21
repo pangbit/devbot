@@ -1365,6 +1365,59 @@ func TestRouterNewSession_ClearsSessionID(t *testing.T) {
 	}
 }
 
+// TestExecClaude_ProgressFires verifies that onProgress sends intermediate cards
+// after 5 seconds, rate-limits subsequent calls, and skips the final result card
+// when it matches the last progress content. Skipped in short mode (-short flag).
+func TestExecClaude_ProgressFires(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 6-second timing test; run without -short to include")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	// Script: sleep 5.5s, emit two assistant events (second tests sinceLast<10s path),
+	// then result with same text as progress (tests "skip duplicate result card" path).
+	scriptContent := `#!/bin/sh
+sleep 5.5
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"computing..."}]}}\n'
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"computing..."}]}}\n'
+printf '{"type":"result","result":"computing...","session_id":"s1"}\n'
+`
+	os.WriteFile(script, []byte(scriptContent), 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "do something slow")
+
+	// A progress card should have been sent (onProgress fired after 5.5s)
+	progressFound := false
+	for _, c := range sender.cards {
+		if strings.Contains(c.Content, "computing") {
+			progressFound = true
+		}
+	}
+	if !progressFound {
+		t.Fatalf("expected progress card after 5.5s, cards: %+v", sender.cards)
+	}
+	// Final result card should NOT be sent (output == lastProgressContent)
+	// Only 1 card total: the progress card; result card is skipped
+	if len(sender.cards) != 1 {
+		t.Fatalf("expected exactly 1 card (progress, result skipped), got %d: %+v", len(sender.cards), sender.cards)
+	}
+	// Completion text should still be sent
+	completionFound := false
+	for _, txt := range sender.texts {
+		if strings.Contains(txt, "完成") {
+			completionFound = true
+		}
+	}
+	if !completionFound {
+		t.Fatalf("expected '完成' text after execution, texts: %v", sender.texts)
+	}
+}
+
 // --- cardSpySender for card-specific assertions ---
 
 type cardSpySender struct {

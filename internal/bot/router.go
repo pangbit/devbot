@@ -542,7 +542,7 @@ func (r *Router) cmdLast(ctx context.Context, chatID string) {
 		r.sender.SendText(ctx, chatID, "暂无历史输出，请先发送消息给 Claude。")
 		return
 	}
-	r.sender.SendCard(ctx, chatID, CardMsg{Content: session.LastOutput})
+	r.sender.SendTextChunked(ctx, chatID, session.LastOutput)
 }
 
 func (r *Router) cmdSummary(ctx context.Context, chatID string) {
@@ -551,7 +551,7 @@ func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 		r.sender.SendText(ctx, chatID, "暂无可总结的输出，请先发送消息给 Claude。")
 		return
 	}
-	prompt := "Please summarize the following output concisely:\n\n" + session.LastOutput
+	prompt := "Please summarize the following output concisely:\n\n" + truncateForDisplay(session.LastOutput, 4000)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
@@ -692,7 +692,8 @@ func (r *Router) cmdDebug(ctx context.Context, chatID string) {
 		r.sender.SendText(ctx, chatID, "暂无上次输出可分析。先执行一个命令再使用 /debug。")
 		return
 	}
-	prompt := fmt.Sprintf("分析以下输出，用中文解释错误原因，并给出具体的修复建议：\n\n```\n%s\n```", session.LastOutput)
+	trimmed := truncateForDisplay(session.LastOutput, 3000)
+	prompt := fmt.Sprintf("分析以下输出，用中文解释错误原因，并给出具体的修复建议：\n\n```\n%s\n```", trimmed)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
