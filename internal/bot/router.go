@@ -730,9 +730,38 @@ func (r *Router) cmdGrep(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "用法: /grep <关键词>\n示例: /grep TODO\n示例: /grep func main")
 		return
 	}
-	r.getSession(chatID) // ensure session exists
-	prompt := fmt.Sprintf("Run `grep -rn --include='*.go' --include='*.ts' --include='*.py' --include='*.js' -l %q .` in the current directory, then show the top matching lines. Only show the command output, no explanation.", args)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "grep", "-rn",
+		"--include=*.go", "--include=*.ts", "--include=*.tsx", "--include=*.js",
+		"--include=*.jsx", "--include=*.py", "--include=*.java", "--include=*.rs",
+		"--include=*.c", "--include=*.cpp", "--include=*.h", "--include=*.rb",
+		"--include=*.sh", "--include=*.yaml", "--include=*.yml", "--include=*.json",
+		"--include=*.md", "--exclude-dir=.git", "--exclude-dir=node_modules",
+		"--exclude-dir=vendor", "--exclude-dir=dist", args, ".")
+	cmd.Dir = workDir
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	cmd.Run() // ignore exit code (grep exits 1 when no matches)
+
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到包含 '%s' 的匹配项。", args))
+		return
+	}
+	const maxOut = 4000
+	if runes := []rune(output); len(runes) > maxOut {
+		output = fmt.Sprintf("（结果过多，仅显示前 %d 字符）\n\n", maxOut) + string(runes[:maxOut])
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("搜索: %s", args), Content: "```\n" + output + "\n```"})
 }
 
 func (r *Router) cmdPR(ctx context.Context, chatID, args string) {
@@ -757,9 +786,41 @@ func (r *Router) cmdFind(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, "用法: /find <文件名模式>\n示例: /find main.go\n示例: /find *.ts")
 		return
 	}
-	r.getSession(chatID) // ensure session exists
-	prompt := fmt.Sprintf("Run `find . -name %q -not -path '*/node_modules/*' -not -path '*/.git/*' | head -30` in the current directory and return the matching file paths. Only show the output, no explanation.", args)
-	r.execClaudeQueued(ctx, chatID, prompt)
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "find", ".",
+		"-name", args,
+		"-not", "-path", "*/.git/*",
+		"-not", "-path", "*/node_modules/*",
+		"-not", "-path", "*/vendor/*",
+		"-not", "-path", "*/dist/*",
+		"-not", "-path", "*/.next/*")
+	cmd.Dir = workDir
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	cmd.Run()
+
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到名为 '%s' 的文件。", args))
+		return
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) > 50 {
+		lines = lines[:50]
+		output = strings.Join(lines, "\n") + fmt.Sprintf("\n（仅显示前 50 条结果，共 %d 条）", len(lines))
+	} else {
+		output = strings.Join(lines, "\n")
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("查找: %s", args), Content: "```\n" + output + "\n```"})
 }
 
 func (r *Router) cmdTest(ctx context.Context, chatID, args string) {

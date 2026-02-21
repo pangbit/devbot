@@ -1749,18 +1749,34 @@ func TestRouterGrep_EmptyArgs(t *testing.T) {
 	}
 }
 
-func TestRouterGrep_WithPattern(t *testing.T) {
+func TestRouterGrep_WithPattern_NoMatches(t *testing.T) {
 	r, sender := newTestRouter(t)
-	r.Route(context.Background(), "chat1", "user1", "/grep TODO")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
+	// In a tempdir with no code files, grep finds nothing
+	r.Route(context.Background(), "chat1", "user1", "/grep SOME_UNIQUE_TOKEN_XYZ")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "未找到") {
+		t.Fatalf("expected 'no match' message, got: %q", msg)
 	}
-	if !hasExecuting {
-		t.Fatalf("expected /grep to trigger execution, got: %v", msgs)
+}
+
+func TestRouterGrep_WithPattern_HasMatches(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go file with a TODO comment
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n// TODO: fix this\nfunc main() {}\n"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/grep TODO")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with grep results, texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "TODO") {
+		t.Fatalf("expected 'TODO' in grep output, got: %q", sender.cards[0].Content)
 	}
 }
 
@@ -2354,20 +2370,92 @@ func TestRouterFind_EmptyArgs(t *testing.T) {
 	}
 }
 
-// TestRouterFind_WithPattern verifies that /find with pattern triggers Claude.
-func TestRouterFind_WithPattern(t *testing.T) {
+// TestRouterFind_WithPattern verifies that /find runs directly and returns results.
+func TestRouterFind_WithPattern_NoMatch(t *testing.T) {
 	r, sender := newTestRouter(t)
-	r.Route(context.Background(), "chat1", "user1", "/find *.go")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
+	// No .go files in the tempdir root (README.md is there but not .go)
+	r.Route(context.Background(), "chat1", "user1", "/find nonexistent_xyz.go")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "未找到") {
+		t.Fatalf("expected 'not found' message, got: %q", msg)
 	}
-	if !hasExecuting {
-		t.Fatalf("expected /find to trigger execution, got: %v", msgs)
+}
+
+func TestRouterFind_WithPattern_HasMatch(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go file for /find to locate
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/find main.go")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with find results, texts: %v", sender.texts)
 	}
+	if !strings.Contains(sender.cards[0].Content, "main.go") {
+		t.Fatalf("expected 'main.go' in find output, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterFind_TruncatesAt50(t *testing.T) {
+	dir := t.TempDir()
+	// Create 55 files matching pattern "test_*.go"
+	for i := 0; i < 55; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("test_%03d.go", i)), []byte("package main"), 0644)
+	}
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/find test_*.go")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with find results, texts: %v", sender.texts)
+	}
+	// With 55 files, should show truncation notice
+	if !strings.Contains(sender.cards[0].Content, "仅显示前") {
+		t.Fatalf("expected truncation notice for >50 results, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterGrep_TruncatesLargeOutput(t *testing.T) {
+	dir := t.TempDir()
+	// Create a file with many matching lines to exceed 4000 chars
+	var lines []string
+	for i := 0; i < 200; i++ {
+		lines = append(lines, fmt.Sprintf("// TODO item %d: this is a long comment that takes up space in the output", i))
+	}
+	os.WriteFile(filepath.Join(dir, "big.go"), []byte("package main\n"+strings.Join(lines, "\n")), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/grep TODO")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with grep results, texts: %v", sender.texts)
+	}
+	if !strings.Contains(sender.cards[0].Content, "结果过多") {
+		t.Fatalf("expected truncation notice for large grep output, got: %q", sender.cards[0].Content[:min(200, len(sender.cards[0].Content))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // TestRouterSessions_ShowsDirHint verifies that /sessions shows workDir context.
