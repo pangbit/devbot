@@ -117,6 +117,17 @@ func TestStoreGetSession(t *testing.T) {
 	}
 }
 
+func TestStoreCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	os.WriteFile(path, []byte("not valid json {{{"), 0644)
+
+	_, err := NewStore(path)
+	if err == nil {
+		t.Fatalf("expected error for corrupt JSON state file")
+	}
+}
+
 func TestStoreDocBindings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

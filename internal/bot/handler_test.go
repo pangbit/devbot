@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -466,6 +467,50 @@ func TestHandleMessage_PostWithText(t *testing.T) {
 	}
 	if router.text != "just some text" {
 		t.Fatalf("expected text 'just some text', got %q", router.text)
+	}
+}
+
+func TestHandleMessage_ImageTooLarge(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "image",
+		`{"image_key":"img_abc123"}`, "msg_001", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	// Image exceeds 10MB limit
+	largeData := make([]byte, maxImageSize+1)
+	dl := &fakeDownloader{imageData: largeData}
+	sender := &fakeSender{}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, sender, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for oversized image")
+	}
+	if len(sender.messages) == 0 || !strings.Contains(sender.messages[0], "too large") {
+		t.Fatalf("expected 'too large' message, got: %v", sender.messages)
+	}
+}
+
+func TestHandleMessage_FileTooLarge(t *testing.T) {
+	raw := makeEventWithMsgID("user", "user1", "oc_chat", "p2p", "file",
+		`{"file_key":"file_xyz","file_name":"report.pdf"}`, "msg_002", nil)
+	var evt larkim.P2MessageReceiveV1
+	json.Unmarshal(raw, &evt)
+
+	// File exceeds 50MB limit
+	largeData := make([]byte, maxFileSize+1)
+	dl := &fakeDownloader{fileData: largeData}
+	sender := &fakeSender{}
+	router := &fakeRouter{}
+	h := NewHandler(router, dl, sender, true, "bot_id", nil)
+	h.HandleMessage(context.Background(), &evt)
+
+	if router.called {
+		t.Fatalf("expected router not called for oversized file")
+	}
+	if len(sender.messages) == 0 || !strings.Contains(sender.messages[0], "too large") {
+		t.Fatalf("expected 'too large' message, got: %v", sender.messages)
 	}
 }
 
