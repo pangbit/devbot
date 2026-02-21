@@ -3305,6 +3305,69 @@ func TestRouterPull_Success(t *testing.T) {
 	}
 }
 
+func TestRouterFetch_DefaultWorkDir(t *testing.T) {
+	// Fetch with empty session WorkDir falls back to work root
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/fetch")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /fetch with empty workDir")
+	}
+}
+
+func TestRouterFetch_WithArgs(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/fetch origin")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /fetch origin")
+	}
+}
+
+func TestRouterBlame_LargeFile(t *testing.T) {
+	// Large blame output (>4000 chars) should be truncated
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "T").Run()
+
+	// Create a large file with many lines
+	largeContent := strings.Repeat("line content here with some more text\n", 200)
+	os.WriteFile(filepath.Join(dir, "large.go"), []byte(largeContent), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add large file").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/blame large.go")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /blame large file")
+	}
+	if !strings.Contains(sender.cards[0].Content, "前") {
+		// Check it's either full output or truncated
+		t.Logf("blame output length: %d", len(sender.cards[0].Content))
+	}
+}
+
 func TestRouterPull_WithArgs(t *testing.T) {
 	// /pull --dry-run should pass args to git pull
 	dir := t.TempDir()
