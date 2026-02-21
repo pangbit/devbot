@@ -329,6 +329,71 @@ func TestRouterRouteFileUnauthorized(t *testing.T) {
 	}
 }
 
+func TestRouterRouteTextWithImages(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+	session := r.getSession("chat1")
+
+	images := []ImageAttachment{
+		{Data: []byte("image-data-1"), FileName: "photo.jpg"},
+		{Data: []byte("image-data-2"), FileName: "screenshot.png"},
+	}
+	r.RouteTextWithImages(context.Background(), "chat1", "user1", "fix this bug", images)
+	q.Shutdown()
+
+	// Verify images were saved to disk
+	for _, img := range images {
+		imgPath := filepath.Join(session.WorkDir, ".devbot-images", filepath.Base(img.FileName))
+		data, err := os.ReadFile(imgPath)
+		if err != nil {
+			t.Fatalf("expected image file %s to exist: %v", img.FileName, err)
+		}
+		if string(data) != string(img.Data) {
+			t.Fatalf("image data mismatch for %s", img.FileName)
+		}
+	}
+
+	// Should have dispatched execution
+	msgs := sender.Messages()
+	if len(msgs) == 0 {
+		t.Fatalf("expected at least one message")
+	}
+}
+
+func TestRouterRouteTextWithImages_Unauthorized(t *testing.T) {
+	r, sender := newTestRouter(t)
+	images := []ImageAttachment{
+		{Data: []byte("data"), FileName: "photo.jpg"},
+	}
+	r.RouteTextWithImages(context.Background(), "chat1", "hacker", "text", images)
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no response for unauthorized user")
+	}
+}
+
+func TestRouterRouteTextWithImages_OnlyImages(t *testing.T) {
+	r, sender, q := newTestRouterForExec(t)
+	images := []ImageAttachment{
+		{Data: []byte("image-data"), FileName: "screenshot.png"},
+	}
+	// No text, only images
+	r.RouteTextWithImages(context.Background(), "chat1", "user1", "", images)
+	q.Shutdown()
+
+	msgs := sender.Messages()
+	if len(msgs) == 0 {
+		t.Fatalf("expected at least one message when images provided without text")
+	}
+}
+
+func TestRouterRouteTextWithImages_NoImages(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// No text and no images — should do nothing
+	r.RouteTextWithImages(context.Background(), "chat1", "user1", "", nil)
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no message when no text and no images")
+	}
+}
+
 func TestRouterRouteDocShare(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.RouteDocShare(context.Background(), "chat1", "user1", "ABC123")
