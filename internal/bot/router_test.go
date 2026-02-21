@@ -292,6 +292,59 @@ func TestRouterCdPathTraversal(t *testing.T) {
 	}
 }
 
+func TestRouterCd_RelativeFromCurrent(t *testing.T) {
+	// /cd ./subdir should navigate relative to current workDir
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "project1", "src")
+	os.MkdirAll(subdir, 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// First cd to project1
+	r.Route(context.Background(), "chat1", "user1", "/cd project1")
+	if !strings.Contains(sender.LastMessage(), "已切换") {
+		t.Fatalf("expected success for /cd project1, got: %q", sender.LastMessage())
+	}
+
+	// Now cd ./src relative to current
+	r.Route(context.Background(), "chat1", "user1", "/cd ./src")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "已切换") {
+		t.Fatalf("expected success for /cd ./src from project1, got: %q", msg)
+	}
+	// Verify we ended up in project1/src
+	sess := store.GetSession("chat1", dir, "sonnet")
+	if !strings.HasSuffix(sess.WorkDir, "project1/src") {
+		t.Fatalf("expected workDir to end with project1/src, got: %q", sess.WorkDir)
+	}
+}
+
+func TestRouterCd_DotDot(t *testing.T) {
+	// /cd .. should go up one level
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "project1")
+	os.MkdirAll(subdir, 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// First cd to project1
+	r.Route(context.Background(), "chat1", "user1", "/cd project1")
+
+	// Now cd ..  - BUT this goes to workRoot (dir), which equals root, so underRoot should pass
+	r.Route(context.Background(), "chat1", "user1", "/cd ..")
+	msg := sender.LastMessage()
+	// ".." from project1 goes to dir which == work root, should succeed
+	if !strings.Contains(msg, "已切换") {
+		t.Fatalf("expected success for /cd .., got: %q", msg)
+	}
+}
+
 func TestUnderRoot(t *testing.T) {
 	tests := []struct {
 		root string

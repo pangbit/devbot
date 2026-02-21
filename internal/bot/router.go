@@ -398,16 +398,24 @@ func (r *Router) cmdRoot(ctx context.Context, chatID, args string) {
 
 func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 	if args == "" {
-		r.sender.SendText(ctx, chatID, "用法: /cd <目录名>\n示例: /cd myproject\n\n使用 /ls 查看可用项目列表。")
+		r.sender.SendText(ctx, chatID, "用法: /cd <目录名>\n示例: /cd myproject\n示例: /cd myproject/src\n示例: /cd ./subdir  （从当前目录出发）\n\n使用 /ls 查看可用项目列表。")
 		return
 	}
-	r.getSession(chatID) // ensure session exists
+	session := r.getSession(chatID)
 	root := r.store.WorkRoot()
 
 	var target string
 	if filepath.IsAbs(args) {
 		target = args
+	} else if strings.HasPrefix(args, "./") || strings.HasPrefix(args, "../") || args == ".." {
+		// Relative to current workDir
+		curDir := session.WorkDir
+		if curDir == "" {
+			curDir = root
+		}
+		target = filepath.Join(curDir, args)
 	} else {
+		// Relative to work root (default behavior)
 		target = filepath.Join(root, args)
 	}
 	target = filepath.Clean(target)
