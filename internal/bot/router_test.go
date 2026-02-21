@@ -4827,6 +4827,51 @@ func TestRouterTree_DefaultWorkDir(t *testing.T) {
 	_ = msg
 }
 
+func TestRouterStash_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/stash")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /stash with empty workDir")
+	}
+}
+
+func TestRouterLog_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/log")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /log with empty workDir")
+	}
+}
+
+func TestRouterShow_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/show")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /show with empty workDir")
+	}
+}
+
+func TestRouterBlame_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/blame README.md")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /blame with empty workDir")
+	}
+}
+
+func TestRouterBranch_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/branch")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /branch with empty workDir")
+	}
+}
+
 func TestRouterPR_DefaultWorkDir(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewStore(filepath.Join(dir, "state.json"))
@@ -4840,5 +4885,75 @@ func TestRouterPR_DefaultWorkDir(t *testing.T) {
 
 	if len(sender.cards) == 0 {
 		t.Fatal("expected a card from /pr with empty workDir")
+	}
+}
+
+func TestRouterRemote_DefaultWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/remote")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /remote with empty workDir")
+	}
+}
+
+func TestRouterTag_DefaultWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/tag")
+
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /tag with empty workDir")
+	}
+}
+
+func TestRouterPRList_DefaultWorkDir(t *testing.T) {
+	r, _ := newRouterWithEmptyWorkDir(t)
+	csender := &cardSpySender{}
+	// Use the same empty workDir pattern but with cardSpySender
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r = NewRouter(context.Background(), ex, store, csender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/prs")
+
+	if len(csender.cards) == 0 && len(csender.texts) == 0 {
+		t.Fatal("expected some response from /prs with empty workDir")
+	}
+}
+
+func TestRouterIssues_DefaultWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/issues")
+
+	if len(sender.cards) == 0 && len(sender.texts) == 0 {
+		t.Fatal("expected some response from /issues with empty workDir")
 	}
 }
