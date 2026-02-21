@@ -4240,3 +4240,24 @@ func TestRouterFile_LargeFile_Truncated(t *testing.T) {
 		t.Fatalf("expected line range info in title for large file, got: %q", title)
 	}
 }
+
+func TestRouterUndo_DefaultWorkDir(t *testing.T) {
+	// Session with WorkDir="" should fall back to WorkRoot
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Route first to create session
+	r.Route(context.Background(), "chat1", "user1", "/ping")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/undo")
+
+	// dir is not a git repo, so changes == "" → "没有未提交"
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "没有未提交") {
+		t.Fatalf("expected no-changes message via WorkRoot fallback, got: %q", msg)
+	}
+}
