@@ -71,6 +71,15 @@ func TestParseDocID_FallbackLastSegment(t *testing.T) {
 	}
 }
 
+func TestParseDocID_URLParseError(t *testing.T) {
+	// url.Parse returns error for malformed URLs — should return raw string
+	malformed := "://invalid"
+	got := ParseDocID(malformed)
+	if got != malformed {
+		t.Fatalf("expected raw string on url.Parse error, got %q", got)
+	}
+}
+
 // --- Fake DocPusher for router tests ---
 
 type fakeDocPusher struct {
