@@ -353,19 +353,24 @@ func (r *Router) cmdLs(ctx context.Context, chatID, args string) {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("读取目录出错: %v", err))
 		return
 	}
-	var dirs []string
+	var lines []string
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			dirs = append(dirs, e.Name())
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
 		}
+		line := e.Name()
+		if branch := gitBranch(filepath.Join(root, e.Name())); branch != "" {
+			line += fmt.Sprintf("  [%s]", branch)
+		}
+		lines = append(lines, line)
 	}
-	if len(dirs) == 0 {
+	if len(lines) == 0 {
 		r.sender.SendText(ctx, chatID, fmt.Sprintf("根目录 %s 下暂无项目目录。\n使用 /cd <目录名> 切换到指定目录。", root))
 		return
 	}
 	r.sender.SendCard(ctx, chatID, CardMsg{
 		Title:   fmt.Sprintf("项目列表 (%s)", root),
-		Content: strings.Join(dirs, "\n"),
+		Content: strings.Join(lines, "\n"),
 	})
 }
 
@@ -460,7 +465,11 @@ func (r *Router) cmdCd(ctx context.Context, chatID, args string) {
 		s.LastOutput = ""
 	})
 	r.save()
-	r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已切换到: %s", target))
+	msg := fmt.Sprintf("✓ 已切换到: %s", target)
+	if branch := gitBranch(target); branch != "" {
+		msg += fmt.Sprintf("  （分支: %s）", branch)
+	}
+	r.sender.SendText(ctx, chatID, msg)
 }
 
 func (r *Router) cmdNewSession(ctx context.Context, chatID string) {
