@@ -3415,6 +3415,7 @@ func TestRouterFetch_DefaultWorkDir(t *testing.T) {
 	sender := &cardSpySender{}
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	r.Route(context.Background(), "chat1", "user1", "/fetch")
@@ -3495,6 +3496,7 @@ func TestRouterPull_DefaultWorkDir(t *testing.T) {
 	sender := &cardSpySender{}
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	r.Route(context.Background(), "chat1", "user1", "/pull")
@@ -3541,7 +3543,8 @@ func TestRouterPush_DefaultWorkDir(t *testing.T) {
 	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
 	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
 
-	// Explicitly set WorkDir to empty so it falls back to work root
+	// Create session first, then set WorkDir to empty so it falls back to work root
+	r.getSession("chat1")
 	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
 
 	r.Route(context.Background(), "chat1", "user1", "/push")
@@ -4762,5 +4765,80 @@ func TestRouterSize_NonexistentPath_Error(t *testing.T) {
 	}
 	if !strings.Contains(msg, "无法获取") {
 		t.Fatalf("expected '无法获取' in error message, got: %q", msg)
+	}
+}
+
+// --- DefaultWorkDir coverage tests for remaining commands ---
+// These tests verify the workDir=="" fallback path in each command.
+
+func newRouterWithEmptyWorkDir(t *testing.T) (*Router, *spySender) {
+	t.Helper()
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	// Create session (so UpdateSession works), then clear WorkDir
+	r.getSession("chat1")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+	return r, sender
+}
+
+func TestRouterGrep_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/grep main")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /grep with empty workDir")
+	}
+}
+
+func TestRouterFind_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/find *.go")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /find with empty workDir")
+	}
+}
+
+func TestRouterTest_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/test")
+	// /test with empty workDir falls back to workRoot (non-Go project → Claude queued)
+	// Just ensure no panic
+	_ = sender.LastMessage()
+}
+
+func TestRouterTodo_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/todo")
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatal("expected some response from /todo with empty workDir")
+	}
+}
+
+func TestRouterTree_DefaultWorkDir(t *testing.T) {
+	r, sender := newRouterWithEmptyWorkDir(t)
+	r.Route(context.Background(), "chat1", "user1", "/tree")
+	msg := sender.LastMessage()
+	// Either a card or a text message
+	_ = msg
+}
+
+func TestRouterPR_DefaultWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	r.getSession("chat1")
+	store.UpdateSession("chat1", func(s *Session) { s.WorkDir = "" })
+
+	r.Route(context.Background(), "chat1", "user1", "/pr")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /pr with empty workDir")
 	}
 }
