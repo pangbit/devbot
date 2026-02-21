@@ -161,6 +161,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdRecent(ctx, chatID, args)
 	case "/debug":
 		r.cmdDebug(ctx, chatID)
+	case "/tree":
+		r.cmdTree(ctx, chatID, args)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/exec":
@@ -225,6 +227,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/test [pattern]`  运行项目测试（Go 即时执行，其他借助 Claude）\n" +
 		"`/todo`  搜索代码中的 TODO/FIXME/HACK/BUG 注释\n" +
 		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
+		"`/tree [dir]`  显示目录结构（最多 2 层深度，优先使用系统 tree 命令）\n" +
 		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/exec <cmd>`  直接执行 Shell 命令（即时返回，无需 Claude）\n" +
@@ -1306,6 +1309,90 @@ func (r *Router) cmdRecent(ctx context.Context, chatID, args string) {
 	})
 }
 
+func (r *Router) cmdTree(ctx context.Context, chatID, args string) {
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+	targetDir := workDir
+	if args != "" {
+		if filepath.IsAbs(args) {
+			targetDir = args
+		} else {
+			targetDir = filepath.Join(workDir, args)
+		}
+	}
+
+	// Try system `tree` command first (prettier output)
+	if _, err := exec.LookPath("tree"); err == nil {
+		execCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(execCtx, "tree", "-L", "3", "--noreport", "-I", ".git")
+		cmd.Dir = targetDir
+		out, err2 := cmd.Output()
+		output := strings.TrimSpace(string(out))
+		if err2 == nil && output != "" {
+			const maxOut = 5000
+			if runes := []rune(output); len(runes) > maxOut {
+				output = string(runes[:maxOut]) + "\n…（内容已截断）"
+			}
+			r.sender.SendCard(ctx, chatID, CardMsg{
+				Title:   fmt.Sprintf("目录结构: %s", filepath.Base(targetDir)),
+				Content: "```\n" + output + "\n```",
+			})
+			return
+		}
+	}
+
+	// Fallback: build tree using os.ReadDir (depth 2)
+	var lines []string
+	var walk func(dir, prefix string, depth int)
+	walk = func(dir, prefix string, depth int) {
+		if depth > 2 {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for i, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			isLast := i == len(entries)-1
+			connector := "├── "
+			if isLast {
+				connector = "└── "
+			}
+			lines = append(lines, prefix+connector+e.Name())
+			if e.IsDir() && depth < 2 {
+				childPrefix := prefix + "│   "
+				if isLast {
+					childPrefix = prefix + "    "
+				}
+				walk(filepath.Join(dir, e.Name()), childPrefix, depth+1)
+			}
+		}
+	}
+	lines = append(lines, filepath.Base(targetDir)+"/")
+	walk(targetDir, "", 0)
+
+	if len(lines) <= 1 {
+		r.sender.SendText(ctx, chatID, fmt.Sprintf("目录 %s 为空或不存在。", targetDir))
+		return
+	}
+	output := strings.Join(lines, "\n")
+	const maxOut = 5000
+	if runes := []rune(output); len(runes) > maxOut {
+		output = string(runes[:maxOut]) + "\n…（内容已截断）"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:   fmt.Sprintf("目录结构: %s", filepath.Base(targetDir)),
+		Content: "```\n" + output + "\n```",
+	})
+}
+
 func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /sh <命令>\n示例: /sh ls -la\n示例: /sh cat README.md")
@@ -1455,7 +1542,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/show", "/blame", "/branch", "/commit", "/fetch", "/pull", "/push", "/pr",
 	"/undo", "/stash", "/clean",
-	"/grep", "/find", "/test", "/todo", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
+	"/grep", "/find", "/test", "/todo", "/recent", "/tree", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }
 

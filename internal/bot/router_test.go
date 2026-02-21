@@ -4038,3 +4038,69 @@ func TestRouterGit_DefaultWorkDir(t *testing.T) {
 		t.Fatal("expected a card via WorkRoot fallback")
 	}
 }
+
+// --- /tree tests ---
+
+func TestRouterTree_NoArgs(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "src"), 0755)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0644)
+	os.WriteFile(filepath.Join(dir, "src", "main.go"), []byte("package main"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tree")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /tree")
+	}
+	content := sender.cards[0].Content
+	if !strings.Contains(content, "README.md") {
+		t.Fatalf("expected README.md in tree output, got: %q", content)
+	}
+	if !strings.Contains(content, "src") {
+		t.Fatalf("expected src/ in tree output, got: %q", content)
+	}
+}
+
+func TestRouterTree_WithSubdir(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "sub", "deep"), 0755)
+	os.WriteFile(filepath.Join(dir, "sub", "file.txt"), []byte("hi"), 0644)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tree sub")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /tree sub")
+	}
+	if !strings.Contains(sender.cards[0].Content, "file.txt") {
+		t.Fatalf("expected file.txt in subdir tree, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterTree_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	emptyDir := filepath.Join(dir, "empty")
+	os.MkdirAll(emptyDir, 0755)
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &spySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/tree empty")
+
+	msg := sender.LastMessage()
+	// Either a card with just the dir name, or text saying it's empty
+	if msg == "" {
+		t.Fatal("expected some response from /tree on empty dir")
+	}
+}

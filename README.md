@@ -225,6 +225,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/test [pattern]` — 运行项目测试（Go 项目即时执行，其他借助 Claude）
 - `/todo` — 搜索代码中的 TODO/FIXME/HACK/BUG 注释（即时响应）
 - `/recent [n]` — 列出最近修改的 n 个文件（默认 10 个）
+- `/tree [dir]` — 显示目录结构（最多 2 层，优先使用系统 tree 命令）
 - `/debug` — 分析上次输出中的错误并给出修复建议
 - `/exec <cmd>` — 直接执行 Shell 命令（即时返回，无需 Claude，适合 `ls`、`make`、`go test` 等）
 - `/sh <cmd>` — 通过 Claude 执行 Shell 命令（带 AI 解释）
