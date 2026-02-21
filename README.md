@@ -219,6 +219,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/find <name>` — 按文件名查找文件（支持通配符，如 `*.go`）
 - `/test [pattern]` — 运行项目测试（自动识别 Go/Node/Python/Rust）
 - `/recent [n]` — 列出最近修改的 n 个文件（默认 10 个）
+- `/debug` — 分析上次输出中的错误并给出修复建议
 - `/sh <cmd>` — 通过 Claude 执行 Shell 命令
 - `/file <path>` — 发送项目文件内容到聊天
 

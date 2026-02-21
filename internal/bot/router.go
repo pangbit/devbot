@@ -151,6 +151,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdTest(ctx, chatID, args)
 	case "/recent":
 		r.cmdRecent(ctx, chatID, args)
+	case "/debug":
+		r.cmdDebug(ctx, chatID)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
 	case "/file":
@@ -207,6 +209,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/find <name>`  按文件名查找文件（支持通配符，如 *.go）\n" +
 		"`/test [pattern]`  运行项目测试（自动识别 Go/Node/Python/Rust）\n" +
 		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
+		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
 		"`/file <path>`  查看项目文件内容\n" +
 		"`/sh <cmd>`  通过 Claude 执行 Shell 命令\n\n" +
 		"**📄 飞书文档同步:**\n" +
@@ -683,6 +686,16 @@ func (r *Router) cmdTest(ctx context.Context, chatID, args string) {
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+func (r *Router) cmdDebug(ctx context.Context, chatID string) {
+	session := r.getSession(chatID)
+	if session.LastOutput == "" {
+		r.sender.SendText(ctx, chatID, "暂无上次输出可分析。先执行一个命令再使用 /debug。")
+		return
+	}
+	prompt := fmt.Sprintf("分析以下输出，用中文解释错误原因，并给出具体的修复建议：\n\n```\n%s\n```", session.LastOutput)
+	r.execClaudeQueued(ctx, chatID, prompt)
+}
+
 func (r *Router) cmdRecent(ctx context.Context, chatID, args string) {
 	r.getSession(chatID) // ensure session exists
 	n := "10"
@@ -776,7 +789,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
 	"/undo", "/stash",
-	"/grep", "/find", "/test", "/recent", "/sh", "/file", "/compact",
+	"/grep", "/find", "/test", "/recent", "/debug", "/sh", "/file", "/compact",
 	"/doc",
 }
 

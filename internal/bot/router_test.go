@@ -2204,6 +2204,37 @@ func TestRouterRecent_WithCount(t *testing.T) {
 	}
 }
 
+// TestRouterDebug_NoOutput verifies /debug with no last output shows a hint.
+func TestRouterDebug_NoOutput(t *testing.T) {
+	r, sender := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/debug")
+	msg := sender.LastMessage()
+	if !strings.Contains(msg, "暂无") {
+		t.Fatalf("expected no-output message for /debug, got: %q", msg)
+	}
+}
+
+// TestRouterDebug_WithOutput verifies /debug with last output triggers Claude.
+func TestRouterDebug_WithOutput(t *testing.T) {
+	r, sender := newTestRouter(t)
+	// Set a last output first
+	r.store.GetSession("chat1", r.store.WorkRoot(), "sonnet")
+	r.store.UpdateSession("chat1", func(s *Session) {
+		s.LastOutput = "Error: connection refused on port 8080"
+	})
+	r.Route(context.Background(), "chat1", "user1", "/debug")
+	msgs := sender.messages
+	hasExecuting := false
+	for _, m := range msgs {
+		if strings.Contains(m, "执行中") {
+			hasExecuting = true
+		}
+	}
+	if !hasExecuting {
+		t.Fatalf("expected /debug with output to trigger execution, got: %v", msgs)
+	}
+}
+
 // TestRouterFind_EmptyArgs verifies that /find without args shows usage.
 func TestRouterFind_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
