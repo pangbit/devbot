@@ -12,3 +12,8 @@ config.yaml
 
 # Internal development plans (not for public)
 docs/plans/
+
+# Test coverage output
+*.out
+*.html
+coverage*
