@@ -615,14 +615,34 @@ func (r *Router) cmdSummary(ctx context.Context, chatID string) {
 }
 
 func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) {
-	r.getSession(chatID) // ensure session exists
-	var prompt string
-	if msg == "" {
-		prompt = "Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then write a concise commit message based on the changes (`git diff --cached`), and commit. Only show the final commit output, no explanation."
-	} else {
-		prompt = fmt.Sprintf("Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then commit with the message: %s\nOnly show the command output, no explanation.", msg)
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
 	}
-	r.execClaudeQueued(ctx, chatID, prompt)
+
+	if msg == "" {
+		// No message provided: use Claude to auto-generate a commit message
+		prompt := "Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then write a concise commit message based on the changes (`git diff --cached`), and commit. Only show the final commit output, no explanation."
+		r.execClaudeQueued(ctx, chatID, prompt)
+		return
+	}
+
+	// Message provided: run directly without Claude
+	// Stage tracked changes (not untracked files)
+	runGitOutput(workDir, "add", "-u")
+	out, err := runGitOutput(workDir, "commit", "-m", msg)
+	tpl := "green"
+	title := "git commit 成功"
+	if err != nil {
+		tpl = "red"
+		title = "git commit 出错"
+	}
+	content := out
+	if content == "" {
+		content = "（无输出）"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + content + "\n```", Template: tpl})
 }
 
 func (r *Router) cmdGit(ctx context.Context, chatID, args string) {

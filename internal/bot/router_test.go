@@ -810,6 +810,51 @@ func TestRouterCommit_EmptyMsg(t *testing.T) {
 	}
 }
 
+func TestRouterCommit_WithMsg_NothingToCommit(t *testing.T) {
+	// /commit "message" with nothing staged should show error card
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/commit my commit message")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /commit with message")
+	}
+	// Should be an error (nothing to commit)
+	if !strings.Contains(sender.cards[0].Title, "出错") {
+		t.Fatalf("expected error card (nothing to commit), got: %q", sender.cards[0].Title)
+	}
+}
+
+func TestRouterCommit_WithMsg_Success(t *testing.T) {
+	// /commit "message" with actual changes should commit directly
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "commit", "--allow-empty", "-m", "init").Run()
+	os.WriteFile(filepath.Join(dir, "file.go"), []byte("package main"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/commit add file.go")
+
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card from /commit with message")
+	}
+	if !strings.Contains(sender.cards[0].Title, "成功") {
+		t.Fatalf("expected success card, got: %q", sender.cards[0].Title)
+	}
+}
+
 func TestRouterSh_EmptyArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
 	r.Route(context.Background(), "chat1", "user1", "/sh")
