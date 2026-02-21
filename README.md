@@ -199,7 +199,7 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/fetch [args]` — 从远程获取但不合并（即时响应，自动 prune）
 - `/pull [args]` — 从远程拉取（即时响应）
 - `/push [args]` — 推送到远程（即时响应，支持 `--force` 等参数）
-- `/pr [title]` — 创建 Pull Request（使用 gh CLI）
+- `/pr [title]` — 创建 Pull Request（即时响应，使用 `gh pr create --fill` 自动填充标题和描述）
 - `/undo` — 撤销所有未提交的更改（即时响应，含已暂存的更改）
 - `/stash [pop]` — 暂存/恢复更改（即时响应）
 - `/clean [-f]` — 查看/清理未跟踪文件（默认预览将被删除的文件，加 `-f` 或 `--force` 确认删除）

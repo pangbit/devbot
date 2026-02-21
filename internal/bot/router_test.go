@@ -1932,33 +1932,40 @@ func TestRouterGrep_WithPattern_HasMatches(t *testing.T) {
 
 // --- /pr tests ---
 
-func TestRouterPR_NoTitle(t *testing.T) {
+func TestRouterPR_NoTitle_GhNotAvailable(t *testing.T) {
+	// In test environment gh is either not available or not authenticated;
+	// we expect an error card rather than queueing.
 	r, sender := newTestRouter(t)
+	csender := &cardSpySender{}
+	// re-create with cardSpySender
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r = NewRouter(context.Background(), ex, store, csender, map[string]bool{"user1": true}, dir, nil)
+	_ = sender // suppress unused warning
+
 	r.Route(context.Background(), "chat1", "user1", "/pr")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
+
+	// Either gh fails (no auth / no git) → red error card
+	// or gh succeeds → green success card
+	if len(csender.cards) == 0 {
+		t.Fatal("expected some card response from /pr")
 	}
-	if !hasExecuting {
-		t.Fatalf("expected /pr to trigger execution, got: %v", msgs)
-	}
+	// We just verify a card came back (we don't enforce pass/fail since gh availability varies)
 }
 
 func TestRouterPR_WithTitle(t *testing.T) {
-	r, sender := newTestRouter(t)
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
 	r.Route(context.Background(), "chat1", "user1", "/pr feat: add new feature")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
-	}
-	if !hasExecuting {
-		t.Fatalf("expected /pr with title to trigger execution, got: %v", msgs)
+
+	// Either success or error card — just verify we get a response (not queueing)
+	if len(sender.cards) == 0 {
+		t.Fatal("expected a card response from /pr with title")
 	}
 }
 

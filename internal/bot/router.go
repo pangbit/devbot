@@ -214,7 +214,7 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/fetch [args]`  从远程获取但不合并（即时响应，自动 prune）\n" +
 		"`/pull [args]`  从远程拉取（即时响应）\n" +
 		"`/push [args]`  推送到远程（即时响应）\n" +
-		"`/pr [title]`  创建 Pull Request\n" +
+		"`/pr [title]`  创建 Pull Request（即时响应，使用 gh --fill 自动填充）\n" +
 		"`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
 		"`/stash [pop]`  暂存/恢复更改\n" +
 		"`/clean [-f]`  查看/清理未跟踪文件（默认预览，加 -f 确认删除）\n" +
@@ -1069,14 +1069,43 @@ func (r *Router) cmdGrep(ctx context.Context, chatID, args string) {
 }
 
 func (r *Router) cmdPR(ctx context.Context, chatID, args string) {
-	r.getSession(chatID) // ensure session exists
-	var prompt string
-	if args == "" {
-		prompt = "Create a pull request using `gh pr create` with an auto-generated title and body based on the current branch changes. Only show the PR URL in the output, no extra explanation."
-	} else {
-		prompt = fmt.Sprintf("Create a pull request using `gh pr create --title %q` with an auto-generated body based on the current branch changes. Only show the PR URL in the output, no extra explanation.", args)
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
 	}
-	r.execClaudeQueued(ctx, chatID, prompt)
+
+	// Use gh pr create --fill for instant PR creation (fills title/body from commits)
+	ghArgs := []string{"pr", "create", "--fill"}
+	if args != "" {
+		ghArgs = append(ghArgs, "--title", args)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "gh", ghArgs...)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+
+	if err != nil {
+		content := output
+		if content == "" {
+			content = err.Error()
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{
+			Title:    "创建 PR 出错",
+			Content:  content,
+			Template: "red",
+		})
+		return
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{
+		Title:    "✓ PR 已创建",
+		Content:  output,
+		Template: "green",
+	})
 }
 
 func (r *Router) cmdCompact(ctx context.Context, chatID string) {
