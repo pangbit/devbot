@@ -873,17 +873,36 @@ func TestRouterLog_DefaultCount(t *testing.T) {
 
 func TestRouterBranch_NoArgs(t *testing.T) {
 	r, sender := newTestRouter(t)
-	// /branch without args should trigger execution (show branches)
+	// /branch without args in non-git dir should show error message
 	r.Route(context.Background(), "chat1", "user1", "/branch")
-	msgs := sender.messages
-	hasExecuting := false
-	for _, m := range msgs {
-		if strings.Contains(m, "执行中") {
-			hasExecuting = true
-		}
+	msg := sender.LastMessage()
+	if msg == "" {
+		t.Fatalf("expected some response from /branch, got none")
 	}
-	if !hasExecuting {
-		t.Fatalf("expected /branch to trigger execution, got: %v", msgs)
+}
+
+func TestRouterBranch_NoArgs_InGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	exec.Command("git", "-C", dir, "init").Run()
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+	store.GetSession("chat1", dir, "sonnet")
+
+	r.Route(context.Background(), "chat1", "user1", "/branch")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected card with branch list, texts: %v", sender.texts)
+	}
+	if sender.cards[0].Title != "分支列表" {
+		t.Fatalf("expected branch list card, got: %q", sender.cards[0].Title)
 	}
 }
 

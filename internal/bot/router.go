@@ -681,13 +681,22 @@ func (r *Router) cmdDiff(ctx context.Context, chatID string) {
 }
 
 func (r *Router) cmdBranch(ctx context.Context, chatID, args string) {
-	r.getSession(chatID) // ensure session exists
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
 	if args == "" {
-		prompt := "Run `git branch -v` in the current directory and return the output, showing which branch is current. Only show the command output, no explanation."
-		r.execClaudeQueued(ctx, chatID, prompt)
+		// List branches directly (instant)
+		output, err := runGitOutput(workDir, "branch", "-v")
+		if err != nil || output == "" {
+			r.sender.SendText(ctx, chatID, "当前目录不是 git 仓库或暂无分支。")
+			return
+		}
+		r.sender.SendCard(ctx, chatID, CardMsg{Title: "分支列表", Content: "```\n" + output + "\n```"})
 		return
 	}
-	// Create new branch or switch to existing
+	// Create new branch or switch to existing — keep Claude for smart error handling
 	prompt := fmt.Sprintf("Run `git checkout -b %s 2>/dev/null || git checkout %s` in the current directory and return the output. Only show the command output, no explanation.", args, args)
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
