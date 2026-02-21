@@ -220,7 +220,8 @@ tail -f /opt/devbot/devbot.log # 文件日志
 - `/test [pattern]` — 运行项目测试（自动识别 Go/Node/Python/Rust）
 - `/recent [n]` — 列出最近修改的 n 个文件（默认 10 个）
 - `/debug` — 分析上次输出中的错误并给出修复建议
-- `/sh <cmd>` — 通过 Claude 执行 Shell 命令
+- `/exec <cmd>` — 直接执行 Shell 命令（即时返回，无需 Claude，适合 `ls`、`make`、`go test` 等）
+- `/sh <cmd>` — 通过 Claude 执行 Shell 命令（带 AI 解释）
 - `/file <path>` — 发送项目文件内容到聊天
 
 **飞书文档同步：**

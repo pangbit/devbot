@@ -155,6 +155,8 @@ func (r *Router) handleCommand(ctx context.Context, chatID, text string) {
 		r.cmdDebug(ctx, chatID)
 	case "/sh":
 		r.cmdSh(ctx, chatID, args)
+	case "/exec":
+		r.cmdExec(ctx, chatID, args)
 	case "/file":
 		r.cmdFile(ctx, chatID, args)
 	case "/doc":
@@ -211,7 +213,8 @@ func (r *Router) cmdHelp(ctx context.Context, chatID string) {
 		"`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
 		"`/debug`  分析上次输出中的错误并给出修复建议\n" +
 		"`/file <path>`  查看项目文件内容\n" +
-		"`/sh <cmd>`  通过 Claude 执行 Shell 命令\n\n" +
+		"`/exec <cmd>`  直接执行 Shell 命令（即时返回，无需 Claude）\n" +
+		"`/sh <cmd>`  通过 Claude 执行 Shell 命令（带 AI 解释）\n\n" +
 		"**📄 飞书文档同步:**\n" +
 		"`/doc push <path>`  将 Markdown 文件推送到飞书文档\n" +
 		"`/doc pull <path>`  将飞书文档内容拉取到本地文件\n" +
@@ -717,6 +720,60 @@ func (r *Router) cmdSh(ctx context.Context, chatID, args string) {
 	r.execClaudeQueued(ctx, chatID, prompt)
 }
 
+// cmdExec runs a shell command directly (no Claude) and returns the output immediately.
+// This is much faster than /sh for simple commands since it bypasses the LLM.
+func (r *Router) cmdExec(ctx context.Context, chatID, args string) {
+	if args == "" {
+		r.sender.SendText(ctx, chatID, "用法: /exec <命令>\n示例: /exec ls -la\n示例: /exec make build\n示例: /exec go test ./...")
+		return
+	}
+	session := r.getSession(chatID)
+	workDir := session.WorkDir
+	if workDir == "" {
+		workDir = r.store.WorkRoot()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "sh", "-c", args)
+	cmd.Dir = workDir
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	start := time.Now()
+	runErr := cmd.Run()
+	elapsed := time.Since(start).Round(time.Millisecond)
+
+	combined := outBuf.String()
+	if errBuf.Len() > 0 {
+		if combined != "" {
+			combined += "\n"
+		}
+		combined += errBuf.String()
+	}
+
+	const maxOut = 4000
+	if runes := []rune(combined); len(runes) > maxOut {
+		combined = "（输出过长，仅显示末尾部分）\n\n" + string(runes[len(runes)-maxOut:])
+	}
+
+	title := fmt.Sprintf("$ %s  （耗时 %s）", args, elapsed)
+	if combined == "" {
+		combined = "（无输出）"
+	}
+
+	tpl := "blue"
+	if runErr != nil && execCtx.Err() == context.DeadlineExceeded {
+		tpl = "red"
+		combined = "⏱ 命令超时（30秒）\n\n" + combined
+	} else if runErr != nil {
+		tpl = "red"
+	}
+	r.sender.SendCard(ctx, chatID, CardMsg{Title: title, Content: "```\n" + combined + "\n```", Template: tpl})
+}
+
 func (r *Router) cmdFile(ctx context.Context, chatID, args string) {
 	if args == "" {
 		r.sender.SendText(ctx, chatID, "用法: /file <文件路径>\n示例: /file README.md\n示例: /file src/main.go")
@@ -790,7 +847,7 @@ var knownCommands = []string{
 	"/last", "/summary", "/model", "/yolo", "/safe",
 	"/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
 	"/undo", "/stash",
-	"/grep", "/find", "/test", "/recent", "/debug", "/sh", "/file", "/compact",
+	"/grep", "/find", "/test", "/recent", "/debug", "/sh", "/exec", "/file", "/compact",
 	"/doc",
 }
 

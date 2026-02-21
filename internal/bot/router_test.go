@@ -1022,9 +1022,16 @@ func TestRouterSave_StoreError(t *testing.T) {
 func TestRouterExecClaudeQueued_QueueFull(t *testing.T) {
 	r, sender, q := newTestRouterForExec(t)
 
-	// Block the worker so the queue can fill up.
+	// Block the worker and wait for it to actually start, then fill the queue.
+	// Without waiting, the worker goroutine may or may not have picked up the
+	// blocking task before the fill loop runs, making channel occupancy non-deterministic.
+	started := make(chan struct{})
 	done := make(chan struct{})
-	q.Enqueue("chat1", func() { <-done })
+	q.Enqueue("chat1", func() {
+		close(started)
+		<-done
+	})
+	<-started // worker is now blocked executing the first task; channel is empty
 
 	// Fill queue to capacity (100 slots).
 	for i := 0; i < 100; i++ {
@@ -2449,6 +2456,146 @@ printf '{"type":"result","is_error":false,"result":"recovered ok","session_id":"
 	}
 	if !found {
 		t.Fatalf("expected '完成' in messages after recovery, got: %v", snd.messages)
+	}
+}
+
+// --- /exec command tests ---
+
+func TestRouterExec_NoArgs(t *testing.T) {
+	r, snd := newTestRouter(t)
+	r.Route(context.Background(), "chat1", "user1", "/exec")
+	if !strings.Contains(snd.LastMessage(), "用法") {
+		t.Fatalf("expected usage message, got: %q", snd.LastMessage())
+	}
+}
+
+func TestRouterExec_Success(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/exec echo hello_devbot")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none; texts: %v", sender.texts)
+	}
+	card := sender.cards[0]
+	if !strings.Contains(card.Content, "hello_devbot") {
+		t.Fatalf("expected output to contain 'hello_devbot', got: %q", card.Content)
+	}
+	if card.Template != "blue" {
+		t.Fatalf("expected blue card for success, got: %q", card.Template)
+	}
+}
+
+func TestRouterExec_ErrorExit(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/exec exit 42")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none")
+	}
+	if sender.cards[0].Template != "red" {
+		t.Fatalf("expected red card for non-zero exit, got: %q", sender.cards[0].Template)
+	}
+}
+
+func TestRouterExec_RunsInWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/exec pwd")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none")
+	}
+	if !strings.Contains(sender.cards[0].Content, dir) {
+		t.Fatalf("expected output to contain workDir %q, got: %q", dir, sender.cards[0].Content)
+	}
+}
+
+func TestRouterExec_StderrIncluded(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	r.Route(context.Background(), "chat1", "user1", "/exec sh -c 'echo errout >&2; exit 1'")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none")
+	}
+	if !strings.Contains(sender.cards[0].Content, "errout") {
+		t.Fatalf("expected stderr in output, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterExec_StdoutAndStderr(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Command produces both stdout and stderr
+	r.Route(context.Background(), "chat1", "user1", "/exec sh -c 'echo outdata; echo errdata >&2; exit 1'")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none")
+	}
+	content := sender.cards[0].Content
+	if !strings.Contains(content, "outdata") {
+		t.Fatalf("expected stdout 'outdata' in content, got: %q", content)
+	}
+	if !strings.Contains(content, "errdata") {
+		t.Fatalf("expected stderr 'errdata' in content, got: %q", content)
+	}
+}
+
+func TestRouterExec_EmptyOutput(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// 'true' exits 0 with no output
+	r.Route(context.Background(), "chat1", "user1", "/exec true")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none")
+	}
+	if !strings.Contains(sender.cards[0].Content, "无输出") {
+		t.Fatalf("expected '无输出' for empty output, got: %q", sender.cards[0].Content)
+	}
+}
+
+func TestRouterExec_LargeOutputTruncated(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(filepath.Join(dir, "state.json"))
+	sender := &cardSpySender{}
+	ex := NewClaudeExecutor("claude", "sonnet", 10*time.Second)
+	r := NewRouter(context.Background(), ex, store, sender, map[string]bool{"user1": true}, dir, nil)
+
+	// Generate > 4000 chars of output (seq 1 2000 produces ~10000 chars)
+	r.Route(context.Background(), "chat1", "user1", "/exec seq 1 2000")
+
+	if len(sender.cards) == 0 {
+		t.Fatalf("expected a card, got none")
+	}
+	if !strings.Contains(sender.cards[0].Content, "输出过长") {
+		t.Fatalf("expected truncation notice for large output, got: %q", sender.cards[0].Content)
 	}
 }
 

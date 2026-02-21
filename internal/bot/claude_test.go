@@ -557,6 +557,26 @@ echo '{"type":"result","result":"","is_error":true,"session_id":"s1"}'
 	}
 }
 
+func TestClaudeExecStream_NoResultWithExitError(t *testing.T) {
+	// Script exits non-zero without emitting a result event.
+	// → !gotResult && ctx.Err()==nil && waitErr!=nil → "claude error: ..."
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '{"type":"system","subtype":"init"}'
+exit 2
+`), 0755)
+
+	exec := NewClaudeExecutor(script, "sonnet", 30*time.Second)
+	_, err := exec.ExecStream(context.Background(), "test", dir, "", "safe", "sonnet", nil)
+	if err == nil {
+		t.Fatalf("expected error for non-zero exit without result")
+	}
+	if !strings.Contains(err.Error(), "claude error") {
+		t.Fatalf("expected 'claude error' in error, got: %v", err)
+	}
+}
+
 func TestFormatAskUserQuestion_InvalidJSON(t *testing.T) {
 	// Invalid JSON should return the raw input as a string.
 	input := json.RawMessage(`not valid json`)

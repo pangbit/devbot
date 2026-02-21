@@ -1,0 +1,3085 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>bot: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">devbot/internal/bot/app.go (71.4%)</option>
+				
+				<option value="file1">devbot/internal/bot/claude.go (99.5%)</option>
+				
+				<option value="file2">devbot/internal/bot/config.go (100.0%)</option>
+				
+				<option value="file3">devbot/internal/bot/doc.go (25.9%)</option>
+				
+				<option value="file4">devbot/internal/bot/handler.go (98.8%)</option>
+				
+				<option value="file5">devbot/internal/bot/lark_downloader.go (0.0%)</option>
+				
+				<option value="file6">devbot/internal/bot/queue.go (100.0%)</option>
+				
+				<option value="file7">devbot/internal/bot/router.go (99.9%)</option>
+				
+				<option value="file8">devbot/internal/bot/sender.go (42.6%)</option>
+				
+				<option value="file9">devbot/internal/bot/store.go (98.4%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package bot
+
+import (
+    "context"
+
+    larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+    "github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+    larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+    larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+)
+
+func defaultWSFactory(appID, appSecret string, handler *dispatcher.EventDispatcher) WSClient <span class="cov0" title="0">{
+    client := larkws.NewClient(
+        appID,
+        appSecret,
+        larkws.WithEventHandler(handler),
+        larkws.WithLogLevel(larkcore.LogLevelDebug),
+    )
+    return client
+}</span>
+
+func buildEventHandler(h *Handler) *dispatcher.EventDispatcher <span class="cov8" title="1">{
+    return dispatcher.NewEventDispatcher("", "").
+        OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error </span><span class="cov0" title="0">{
+            return h.HandleMessage(ctx, event)
+        }</span>)
+}
+
+func Run(ctx context.Context, cfg Config, h *Handler, factory WSFactory) error <span class="cov8" title="1">{
+    if factory == nil </span><span class="cov0" title="0">{
+        factory = defaultWSFactory
+    }</span>
+    <span class="cov8" title="1">handler := buildEventHandler(h)
+    client := factory(cfg.AppID, cfg.AppSecret, handler)
+
+    // The Lark SDK's Start method blocks with select{} and ignores context
+    // cancellation. Run it in a goroutine so we can return when ctx is done.
+    errCh := make(chan error, 1)
+    go func() </span><span class="cov8" title="1">{
+        errCh &lt;- client.Start(ctx)
+    }</span>()
+
+    <span class="cov8" title="1">select </span>{
+    case err := &lt;-errCh:<span class="cov8" title="1">
+        return err</span>
+    case &lt;-ctx.Done():<span class="cov8" title="1">
+        return ctx.Err()</span>
+    }
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package bot
+
+import (
+        "bufio"
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "log"
+        "os/exec"
+        "strings"
+        "sync"
+        "time"
+)
+
+type ExecResult struct {
+        Output             string
+        SessionID          string
+        IsPermissionDenial bool
+}
+
+type ClaudeExecutor struct {
+        claudePath       string
+        model            string
+        timeout          time.Duration
+        mu               sync.Mutex
+        running          *exec.Cmd
+        lastExecDuration time.Duration
+        execCount        int
+}
+
+func NewClaudeExecutor(claudePath, model string, timeout time.Duration) *ClaudeExecutor <span class="cov8" title="1">{
+        return &amp;ClaudeExecutor{
+                claudePath: claudePath,
+                model:      model,
+                timeout:    timeout,
+        }
+}</span>
+
+func (c *ClaudeExecutor) Exec(ctx context.Context, prompt, workDir, sessionID, permissionMode, model string) (ExecResult, error) <span class="cov8" title="1">{
+        args := []string{"-p", prompt, "--output-format", "json"}
+        if sessionID != "" </span><span class="cov8" title="1">{
+                args = append(args, "--resume", sessionID)
+        }</span>
+        <span class="cov8" title="1">if model != "" </span><span class="cov8" title="1">{
+                args = append(args, "--model", model)
+        }</span>
+        <span class="cov8" title="1">if permissionMode == "yolo" </span><span class="cov8" title="1">{
+                args = append(args, "--dangerously-skip-permissions")
+        }</span>
+
+        <span class="cov8" title="1">ctx, cancel := context.WithTimeout(ctx, c.timeout)
+        defer cancel()
+
+        cmd := exec.CommandContext(ctx, c.claudePath, args...)
+        cmd.Dir = workDir
+
+        var stdout, stderr bytes.Buffer
+        cmd.Stdout = &amp;stdout
+        cmd.Stderr = &amp;stderr
+
+        if err := cmd.Start(); err != nil </span><span class="cov8" title="1">{
+                return ExecResult{}, fmt.Errorf("failed to start claude: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">c.mu.Lock()
+        c.running = cmd
+        c.mu.Unlock()
+
+        start := time.Now()
+        err := cmd.Wait()
+        duration := time.Since(start)
+
+        c.mu.Lock()
+        c.running = nil
+        c.execCount++
+        c.lastExecDuration = duration
+        c.mu.Unlock()
+
+        if err != nil </span><span class="cov8" title="1">{
+                if ctx.Err() == context.DeadlineExceeded </span><span class="cov8" title="1">{
+                        return ExecResult{}, fmt.Errorf("execution timed out after %v", c.timeout)
+                }</span>
+                <span class="cov8" title="1">return ExecResult{}, fmt.Errorf("claude error: %w\nstderr: %s", err, stderr.String())</span>
+        }
+
+        <span class="cov8" title="1">rawOut := stdout.String()
+        log.Printf("claude: raw output len=%d session=%s", len(rawOut), sessionID)
+        if len(rawOut) &lt; 3000 </span><span class="cov8" title="1">{
+                log.Printf("claude: raw json: %s", rawOut)
+        }</span> else<span class="cov8" title="1"> {
+                log.Printf("claude: raw json (truncated): %s", rawOut[:3000])
+        }</span>
+
+        <span class="cov8" title="1">var resp struct {
+                Result           string `json:"result"`
+                SessionID        string `json:"session_id"`
+                IsError          bool   `json:"is_error"`
+                Subtype          string `json:"subtype"`
+                PermissionDenials []permissionDenial `json:"permission_denials"`
+        }
+        if err := json.Unmarshal([]byte(rawOut), &amp;resp); err != nil </span><span class="cov8" title="1">{
+                return ExecResult{}, fmt.Errorf("failed to parse claude response: %w\nraw: %s", err, rawOut)
+        }</span>
+        <span class="cov8" title="1">log.Printf("claude: parsed result_len=%d session_id=%s is_error=%v subtype=%s denials=%d", len(resp.Result), resp.SessionID, resp.IsError, resp.Subtype, len(resp.PermissionDenials))
+        if resp.IsError </span><span class="cov8" title="1">{
+                errMsg := resp.Result
+                if errMsg == "" </span><span class="cov8" title="1">{
+                        errMsg = "unknown error"
+                }</span>
+                <span class="cov8" title="1">return ExecResult{SessionID: resp.SessionID}, fmt.Errorf("claude error: %s", errMsg)</span>
+        }
+
+        <span class="cov8" title="1">output := resp.Result
+        // When result is empty but there are permission denials, extract the denied content
+        if output == "" &amp;&amp; len(resp.PermissionDenials) &gt; 0 </span><span class="cov8" title="1">{
+                output = formatPermissionDenials(resp.PermissionDenials)
+                return ExecResult{Output: output, SessionID: resp.SessionID, IsPermissionDenial: true}, nil
+        }</span>
+        <span class="cov8" title="1">return ExecResult{Output: output, SessionID: resp.SessionID}, nil</span>
+}
+
+func (c *ClaudeExecutor) Kill() error <span class="cov8" title="1">{
+        c.mu.Lock()
+        cmd := c.running
+        c.mu.Unlock()
+
+        if cmd == nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("no running process")
+        }</span>
+        <span class="cov8" title="1">return cmd.Process.Kill()</span>
+}
+
+func (c *ClaudeExecutor) IsRunning() bool <span class="cov8" title="1">{
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        return c.running != nil
+}</span>
+
+func (c *ClaudeExecutor) SetModel(model string) <span class="cov8" title="1">{
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        c.model = model
+}</span>
+
+func (c *ClaudeExecutor) Model() string <span class="cov8" title="1">{
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        return c.model
+}</span>
+
+// WaitIdle blocks until no execution is running or the timeout expires.
+// Returns true if idle, false if timed out.
+func (c *ClaudeExecutor) WaitIdle(timeout time.Duration) bool <span class="cov8" title="1">{
+        deadline := time.After(timeout)
+        for </span><span class="cov8" title="1">{
+                if !c.IsRunning() </span><span class="cov8" title="1">{
+                        return true
+                }</span>
+                <span class="cov8" title="1">select </span>{
+                case &lt;-deadline:<span class="cov8" title="1">
+                        return false</span>
+                case &lt;-time.After(100 * time.Millisecond):<span class="cov8" title="1"></span>
+                }
+        }
+}
+
+func (c *ClaudeExecutor) ExecCount() int <span class="cov8" title="1">{
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        return c.execCount
+}</span>
+
+func (c *ClaudeExecutor) LastExecDuration() time.Duration <span class="cov8" title="1">{
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        return c.lastExecDuration
+}</span>
+
+type permissionDenial struct {
+        ToolName  string          `json:"tool_name"`
+        ToolInput json.RawMessage `json:"tool_input"`
+}
+
+func formatPermissionDenials(denials []permissionDenial) string <span class="cov8" title="1">{
+        var sb strings.Builder
+        sb.WriteString("Claude 想向你确认：\n\n")
+        for _, d := range denials </span><span class="cov8" title="1">{
+                if d.ToolName == "AskUserQuestion" </span><span class="cov8" title="1">{
+                        sb.WriteString(formatAskUserQuestion(d.ToolInput))
+                }</span> else<span class="cov8" title="1"> {
+                        sb.WriteString(fmt.Sprintf("(blocked: %s)\n", d.ToolName))
+                }</span>
+        }
+        <span class="cov8" title="1">return sb.String()</span>
+}
+
+func formatAskUserQuestion(input json.RawMessage) string <span class="cov8" title="1">{
+        var ask struct {
+                Questions []struct {
+                        Question string `json:"question"`
+                        Options  []struct {
+                                Label       string `json:"label"`
+                                Description string `json:"description"`
+                        } `json:"options"`
+                } `json:"questions"`
+        }
+        if err := json.Unmarshal(input, &amp;ask); err != nil </span><span class="cov8" title="1">{
+                return string(input)
+        }</span>
+        <span class="cov8" title="1">var sb strings.Builder
+        for _, q := range ask.Questions </span><span class="cov8" title="1">{
+                sb.WriteString(q.Question)
+                sb.WriteString("\n\n")
+                for i, opt := range q.Options </span><span class="cov8" title="1">{
+                        sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, opt.Label, opt.Description))
+                }</span>
+                <span class="cov8" title="1">sb.WriteString("\n请回复选项编号继续。")</span>
+        }
+        <span class="cov8" title="1">return sb.String()</span>
+}
+
+type streamEvent struct {
+        Type              string             `json:"type"`
+        Result            string             `json:"result"`
+        SessionID         string             `json:"session_id"`
+        IsError           bool               `json:"is_error"`
+        Subtype           string             `json:"subtype"`
+        PermissionDenials []permissionDenial `json:"permission_denials"`
+        Message           json.RawMessage    `json:"message"`
+        Errors            []string           `json:"errors"`
+}
+
+func extractAssistantText(msg json.RawMessage) string <span class="cov8" title="1">{
+        if msg == nil </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">var m struct {
+                Content []struct {
+                        Type string `json:"type"`
+                        Text string `json:"text"`
+                } `json:"content"`
+        }
+        if err := json.Unmarshal(msg, &amp;m); err != nil </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">var sb strings.Builder
+        for _, c := range m.Content </span><span class="cov8" title="1">{
+                if c.Type == "text" </span><span class="cov8" title="1">{
+                        sb.WriteString(c.Text)
+                }</span>
+        }
+        <span class="cov8" title="1">return sb.String()</span>
+}
+
+// ExecStream runs Claude CLI with streaming output (stream-json).
+// It calls onProgress with the text from each assistant message during execution.
+// Returns the final ExecResult when done.
+func (c *ClaudeExecutor) ExecStream(ctx context.Context, prompt, workDir, sessionID, permissionMode, model string, onProgress func(text string)) (ExecResult, error) <span class="cov8" title="1">{
+        args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
+        if sessionID != "" </span><span class="cov8" title="1">{
+                args = append(args, "--resume", sessionID)
+        }</span>
+        <span class="cov8" title="1">if model != "" </span><span class="cov8" title="1">{
+                args = append(args, "--model", model)
+        }</span>
+        <span class="cov8" title="1">if permissionMode == "yolo" </span><span class="cov8" title="1">{
+                args = append(args, "--dangerously-skip-permissions")
+        }</span>
+
+        <span class="cov8" title="1">ctx, cancel := context.WithTimeout(ctx, c.timeout)
+        defer cancel()
+
+        cmd := exec.CommandContext(ctx, c.claudePath, args...)
+        cmd.Dir = workDir
+
+        stdout, err := cmd.StdoutPipe()
+        if err != nil </span><span class="cov0" title="0">{
+                return ExecResult{}, fmt.Errorf("failed to create stdout pipe: %w", err)
+        }</span>
+        <span class="cov8" title="1">var stderr bytes.Buffer
+        cmd.Stderr = &amp;stderr
+
+        if err := cmd.Start(); err != nil </span><span class="cov8" title="1">{
+                return ExecResult{}, fmt.Errorf("failed to start claude: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">c.mu.Lock()
+        c.running = cmd
+        c.mu.Unlock()
+
+        start := time.Now()
+
+        var result ExecResult
+        var gotResult bool
+        scanner := bufio.NewScanner(stdout)
+        scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+        for scanner.Scan() </span><span class="cov8" title="1">{
+                line := scanner.Bytes()
+                if len(line) == 0 </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">var ev streamEvent
+                if err := json.Unmarshal(line, &amp;ev); err != nil </span><span class="cov8" title="1">{
+                        log.Printf("claude stream: failed to parse line: %v", err)
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">switch ev.Type </span>{
+                case "assistant":<span class="cov8" title="1">
+                        text := extractAssistantText(ev.Message)
+                        if text != "" &amp;&amp; onProgress != nil </span><span class="cov8" title="1">{
+                                onProgress(text)
+                        }</span>
+                case "system":<span class="cov8" title="1">
+                        log.Printf("claude stream: system event: %s", string(line))</span>
+                case "result":<span class="cov8" title="1">
+                        result.Output = ev.Result
+                        result.SessionID = ev.SessionID
+                        result.IsPermissionDenial = len(ev.PermissionDenials) &gt; 0
+                        if result.Output == "" &amp;&amp; result.IsPermissionDenial </span><span class="cov8" title="1">{
+                                result.Output = formatPermissionDenials(ev.PermissionDenials)
+                        }</span>
+                        <span class="cov8" title="1">if ev.IsError </span><span class="cov8" title="1">{
+                                duration := time.Since(start)
+                                cmd.Wait()
+                                c.mu.Lock()
+                                c.running = nil
+                                c.execCount++
+                                c.lastExecDuration = duration
+                                c.mu.Unlock()
+                                log.Printf("claude stream: error result raw: %s", string(line))
+                                errMsg := ev.Result
+                                if errMsg == "" &amp;&amp; len(ev.Errors) &gt; 0 </span><span class="cov8" title="1">{
+                                        errMsg = strings.Join(ev.Errors, "; ")
+                                }</span>
+                                <span class="cov8" title="1">if errMsg == "" </span><span class="cov8" title="1">{
+                                        errMsg = "unknown error"
+                                }</span>
+                                <span class="cov8" title="1">if stderrStr := stderr.String(); stderrStr != "" </span><span class="cov8" title="1">{
+                                        log.Printf("claude stream: stderr: %s", stderrStr)
+                                        return ExecResult{SessionID: ev.SessionID}, fmt.Errorf("claude error: %s\nstderr: %s", errMsg, stderrStr)
+                                }</span>
+                                <span class="cov8" title="1">return ExecResult{SessionID: ev.SessionID}, fmt.Errorf("claude error: %s", errMsg)</span>
+                        }
+                        <span class="cov8" title="1">gotResult = true</span>
+                }
+        }
+
+        <span class="cov8" title="1">duration := time.Since(start)
+        waitErr := cmd.Wait()
+
+        c.mu.Lock()
+        c.running = nil
+        c.execCount++
+        c.lastExecDuration = duration
+        c.mu.Unlock()
+
+        if !gotResult </span><span class="cov8" title="1">{
+                if ctx.Err() == context.DeadlineExceeded </span><span class="cov8" title="1">{
+                        return ExecResult{}, fmt.Errorf("execution timed out after %v", c.timeout)
+                }</span>
+                <span class="cov8" title="1">if waitErr != nil </span><span class="cov8" title="1">{
+                        return ExecResult{}, fmt.Errorf("claude error: %w\nstderr: %s", waitErr, stderr.String())
+                }</span>
+                <span class="cov8" title="1">return ExecResult{}, fmt.Errorf("no result event in stream output")</span>
+        }
+
+        <span class="cov8" title="1">return result, nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package bot
+
+import (
+        "errors"
+        "os"
+        "path/filepath"
+        "strconv"
+        "strings"
+
+        "gopkg.in/yaml.v3"
+)
+
+type Config struct {
+        AppID          string
+        AppSecret      string
+        AllowedUserIDs map[string]bool
+        BotOpenID      string
+        WorkRoot       string
+        ClaudePath     string
+        ClaudeModel    string
+        ClaudeTimeout  int
+        StateFile      string
+        SkipBotSelf    bool
+}
+
+// yamlConfig mirrors Config for YAML unmarshalling.
+type yamlConfig struct {
+        AppID          string   `yaml:"app_id"`
+        AppSecret      string   `yaml:"app_secret"`
+        AllowedUserIDs []string `yaml:"allowed_user_ids"`
+        BotOpenID      string   `yaml:"bot_open_id"`
+        WorkRoot       string   `yaml:"work_root"`
+        ClaudePath     string   `yaml:"claude_path"`
+        ClaudeModel    string   `yaml:"claude_model"`
+        ClaudeTimeout  int      `yaml:"claude_timeout"`
+        StateFile      string   `yaml:"state_file"`
+        SkipBotSelf    *bool    `yaml:"skip_bot_self"`
+}
+
+// LoadConfig loads configuration from environment variables only (backward compatible).
+func LoadConfig() (Config, error) <span class="cov8" title="1">{
+        return LoadConfigFrom("")
+}</span>
+
+// LoadConfigFrom loads configuration with priority: flags &gt; config file &gt; env vars.
+// If configPath is non-empty, the YAML file is read first, then env vars fill any
+// remaining blanks. Callers can override individual fields after this returns
+// (for command-line flag overrides).
+func LoadConfigFrom(configPath string) (Config, error) <span class="cov8" title="1">{
+        var yc yamlConfig
+
+        if configPath != "" </span><span class="cov8" title="1">{
+                data, err := os.ReadFile(configPath)
+                if err != nil </span><span class="cov8" title="1">{
+                        return Config{}, err
+                }</span>
+                <span class="cov8" title="1">if err := yaml.Unmarshal(data, &amp;yc); err != nil </span><span class="cov8" title="1">{
+                        return Config{}, err
+                }</span>
+        }
+
+        // Helper: pick first non-empty string value (yaml, then env)
+        <span class="cov8" title="1">pick := func(yamlVal, envKey string) string </span><span class="cov8" title="1">{
+                if yamlVal != "" </span><span class="cov8" title="1">{
+                        return yamlVal
+                }</span>
+                <span class="cov8" title="1">return strings.TrimSpace(os.Getenv(envKey))</span>
+        }
+
+        <span class="cov8" title="1">appID := pick(yc.AppID, "DEVBOT_APP_ID")
+        appSecret := pick(yc.AppSecret, "DEVBOT_APP_SECRET")
+        if appID == "" || appSecret == "" </span><span class="cov8" title="1">{
+                return Config{}, errors.New("app_id and app_secret are required (config file or DEVBOT_APP_ID / DEVBOT_APP_SECRET)")
+        }</span>
+
+        // Allowed user IDs: yaml list, fallback to env comma-separated
+        <span class="cov8" title="1">allowedUserIDs := make(map[string]bool)
+        if len(yc.AllowedUserIDs) &gt; 0 </span><span class="cov8" title="1">{
+                for _, id := range yc.AllowedUserIDs </span><span class="cov8" title="1">{
+                        id = strings.TrimSpace(id)
+                        if id != "" </span><span class="cov8" title="1">{
+                                allowedUserIDs[id] = true
+                        }</span>
+                }
+        } else<span class="cov8" title="1"> {
+                allowedRaw := strings.TrimSpace(os.Getenv("DEVBOT_ALLOWED_USER_IDS"))
+                if allowedRaw != "" </span><span class="cov8" title="1">{
+                        for _, id := range strings.Split(allowedRaw, ",") </span><span class="cov8" title="1">{
+                                id = strings.TrimSpace(id)
+                                if id != "" </span><span class="cov8" title="1">{
+                                        allowedUserIDs[id] = true
+                                }</span>
+                        }
+                }
+        }
+        <span class="cov8" title="1">if len(allowedUserIDs) == 0 </span><span class="cov8" title="1">{
+                return Config{}, errors.New("allowed_user_ids is required (config file or DEVBOT_ALLOWED_USER_IDS)")
+        }</span>
+
+        <span class="cov8" title="1">home, _ := os.UserHomeDir()
+
+        workRoot := pick(yc.WorkRoot, "DEVBOT_WORK_ROOT")
+        if workRoot == "" </span><span class="cov8" title="1">{
+                workRoot = home
+        }</span>
+
+        <span class="cov8" title="1">claudePath := pick(yc.ClaudePath, "DEVBOT_CLAUDE_PATH")
+        if claudePath == "" </span><span class="cov8" title="1">{
+                claudePath = "claude"
+        }</span>
+
+        <span class="cov8" title="1">claudeModel := pick(yc.ClaudeModel, "DEVBOT_CLAUDE_MODEL")
+        if claudeModel == "" </span><span class="cov8" title="1">{
+                claudeModel = "sonnet"
+        }</span>
+
+        <span class="cov8" title="1">claudeTimeout := yc.ClaudeTimeout
+        if claudeTimeout &lt;= 0 </span><span class="cov8" title="1">{
+                if v := strings.TrimSpace(os.Getenv("DEVBOT_CLAUDE_TIMEOUT")); v != "" </span><span class="cov8" title="1">{
+                        if n, err := strconv.Atoi(v); err == nil &amp;&amp; n &gt; 0 </span><span class="cov8" title="1">{
+                                claudeTimeout = n
+                        }</span>
+                }
+        }
+        <span class="cov8" title="1">if claudeTimeout &lt;= 0 </span><span class="cov8" title="1">{
+                claudeTimeout = 600
+        }</span>
+
+        <span class="cov8" title="1">stateFile := pick(yc.StateFile, "DEVBOT_STATE_FILE")
+        if stateFile == "" </span><span class="cov8" title="1">{
+                stateFile = filepath.Join(home, ".devbot", "state.json")
+        }</span>
+
+        <span class="cov8" title="1">botOpenID := pick(yc.BotOpenID, "DEVBOT_BOT_OPEN_ID")
+
+        skipBotSelf := true
+        if yc.SkipBotSelf != nil </span><span class="cov8" title="1">{
+                skipBotSelf = *yc.SkipBotSelf
+        }</span> else<span class="cov8" title="1"> if v := strings.TrimSpace(os.Getenv("DEVBOT_SKIP_BOT_SELF")); v == "false" || v == "0" </span><span class="cov8" title="1">{
+                skipBotSelf = false
+        }</span>
+
+        <span class="cov8" title="1">return Config{
+                AppID:          appID,
+                AppSecret:      appSecret,
+                AllowedUserIDs: allowedUserIDs,
+                BotOpenID:      botOpenID,
+                WorkRoot:       workRoot,
+                ClaudePath:     claudePath,
+                ClaudeModel:    claudeModel,
+                ClaudeTimeout:  claudeTimeout,
+                StateFile:      stateFile,
+                SkipBotSelf:    skipBotSelf,
+        }, nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package bot
+
+import (
+        "context"
+        "fmt"
+        "net/url"
+        "strings"
+
+        lark "github.com/larksuite/oapi-sdk-go/v3"
+        larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
+)
+
+const maxBlocksPerRequest = 50 // Feishu API limit for DocumentBlockChildren.Create
+
+// DocPusher is the interface used by the router for document operations.
+// It abstracts away the Lark DocX API so that tests can use a fake implementation.
+type DocPusher interface {
+        CreateAndPushDoc(ctx context.Context, title, content string) (docID, docURL string, err error)
+        PullDocContent(ctx context.Context, docID string) (string, error)
+}
+
+// DocSyncer implements DocPusher using the Lark DocX API.
+type DocSyncer struct {
+        client *lark.Client
+}
+
+// NewDocSyncer creates a new DocSyncer backed by the given Lark client.
+func NewDocSyncer(client *lark.Client) *DocSyncer <span class="cov0" title="0">{
+        return &amp;DocSyncer{client: client}
+}</span>
+
+// CreateAndPushDoc creates a new Feishu document with the given title, then
+// inserts the content as text paragraph blocks. Returns the document ID and URL.
+func (d *DocSyncer) CreateAndPushDoc(ctx context.Context, title, content string) (string, string, error) <span class="cov0" title="0">{
+        // 1. Create the document
+        createReq := larkdocx.NewCreateDocumentReqBuilder().
+                Body(larkdocx.NewCreateDocumentReqBodyBuilder().
+                        Title(title).
+                        Build()).
+                Build()
+
+        createResp, err := d.client.Docx.Document.Create(ctx, createReq)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", "", fmt.Errorf("create document: %w", err)
+        }</span>
+        <span class="cov0" title="0">if !createResp.Success() </span><span class="cov0" title="0">{
+                return "", "", fmt.Errorf("create document failed: code=%d msg=%s", createResp.Code, createResp.Msg)
+        }</span>
+
+        <span class="cov0" title="0">if createResp.Data == nil || createResp.Data.Document == nil || createResp.Data.Document.DocumentId == nil </span><span class="cov0" title="0">{
+                return "", "", fmt.Errorf("create document: response missing document ID")
+        }</span>
+        <span class="cov0" title="0">docID := *createResp.Data.Document.DocumentId
+        docURL := fmt.Sprintf("https://feishu.cn/docx/%s", docID)
+
+        // 2. Insert content as paragraph blocks (max 50 per API call)
+        if content != "" </span><span class="cov0" title="0">{
+                blocks := buildParagraphBlocks(content)
+                for i := 0; i &lt; len(blocks); i += maxBlocksPerRequest </span><span class="cov0" title="0">{
+                        end := i + maxBlocksPerRequest
+                        if end &gt; len(blocks) </span><span class="cov0" title="0">{
+                                end = len(blocks)
+                        }</span>
+                        <span class="cov0" title="0">batch := blocks[i:end]
+
+                        childrenReq := larkdocx.NewCreateDocumentBlockChildrenReqBuilder().
+                                DocumentId(docID).
+                                BlockId(docID).
+                                DocumentRevisionId(-1).
+                                Body(larkdocx.NewCreateDocumentBlockChildrenReqBodyBuilder().
+                                        Children(batch).
+                                        Index(-1).
+                                        Build()).
+                                Build()
+
+                        childResp, err := d.client.Docx.DocumentBlockChildren.Create(ctx, childrenReq)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return docID, docURL, fmt.Errorf("insert blocks (batch %d): %w", i/maxBlocksPerRequest, err)
+                        }</span>
+                        <span class="cov0" title="0">if !childResp.Success() </span><span class="cov0" title="0">{
+                                return docID, docURL, fmt.Errorf("insert blocks failed (batch %d): code=%d msg=%s", i/maxBlocksPerRequest, childResp.Code, childResp.Msg)
+                        }</span>
+                }
+        }
+
+        <span class="cov0" title="0">return docID, docURL, nil</span>
+}
+
+// PullDocContent retrieves the raw text content of a Feishu document.
+func (d *DocSyncer) PullDocContent(ctx context.Context, docID string) (string, error) <span class="cov0" title="0">{
+        req := larkdocx.NewRawContentDocumentReqBuilder().
+                DocumentId(docID).
+                Build()
+
+        resp, err := d.client.Docx.Document.RawContent(ctx, req)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("get raw content: %w", err)
+        }</span>
+        <span class="cov0" title="0">if !resp.Success() </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("get raw content failed: code=%d msg=%s", resp.Code, resp.Msg)
+        }</span>
+
+        <span class="cov0" title="0">if resp.Data == nil || resp.Data.Content == nil </span><span class="cov0" title="0">{
+                return "", nil
+        }</span>
+        <span class="cov0" title="0">return *resp.Data.Content, nil</span>
+}
+
+// buildParagraphBlocks splits content by newlines and creates a text block for each line.
+// Empty lines are converted to blocks with a single space, since the Feishu API
+// rejects empty TextRun content (error 99992402 "field validation failed").
+func buildParagraphBlocks(content string) []*larkdocx.Block <span class="cov0" title="0">{
+        lines := strings.Split(content, "\n")
+        blocks := make([]*larkdocx.Block, 0, len(lines))
+        for _, line := range lines </span><span class="cov0" title="0">{
+                if line == "" </span><span class="cov0" title="0">{
+                        line = " "
+                }</span>
+                <span class="cov0" title="0">textElement := larkdocx.NewTextElementBuilder().
+                        TextRun(larkdocx.NewTextRunBuilder().Content(line).Build()).
+                        Build()
+
+                block := larkdocx.NewBlockBuilder().
+                        BlockType(2). // 2 = Text block
+                        Text(larkdocx.NewTextBuilder().
+                                Elements([]*larkdocx.TextElement{textElement}).
+                                Build()).
+                        Build()
+                blocks = append(blocks, block)</span>
+        }
+        <span class="cov0" title="0">return blocks</span>
+}
+
+// ParseDocID extracts a document ID from a Feishu URL or returns the raw ID if
+// it does not look like a URL. Supported URL formats:
+//   - https://xxx.feishu.cn/docx/DOCID
+//   - https://xxx.feishu.cn/docx/DOCID?query...
+//   - Raw doc ID string (returned as-is)
+func ParseDocID(raw string) string <span class="cov8" title="1">{
+        raw = strings.TrimSpace(raw)
+        if raw == "" </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+
+        // If it does not look like a URL, treat it as a raw doc ID.
+        <span class="cov8" title="1">if !strings.Contains(raw, "://") </span><span class="cov8" title="1">{
+                return raw
+        }</span>
+
+        <span class="cov8" title="1">u, err := url.Parse(raw)
+        if err != nil </span><span class="cov8" title="1">{
+                return raw
+        }</span>
+
+        // Path is expected to be /docx/DOCID or /docx/DOCID/
+        <span class="cov8" title="1">parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+        if len(parts) &gt;= 2 &amp;&amp; parts[0] == "docx" </span><span class="cov8" title="1">{
+                return parts[1]
+        }</span>
+
+        // Fallback: return the last non-empty path segment
+        <span class="cov8" title="1">for i := len(parts) - 1; i &gt;= 0; i-- </span><span class="cov8" title="1">{
+                if parts[i] != "" </span><span class="cov8" title="1">{
+                        return parts[i]
+                }</span>
+        }
+        <span class="cov8" title="1">return raw</span>
+}
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">package bot
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+        "log"
+        "net/http"
+        "regexp"
+        "strings"
+
+        larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+)
+
+type Sender interface {
+        SendText(ctx context.Context, chatID, text string) error
+        SendTextChunked(ctx context.Context, chatID, text string) error
+        SendCard(ctx context.Context, chatID string, card CardMsg) error
+}
+
+type ImageAttachment struct {
+        Data     []byte
+        FileName string
+}
+
+type MessageRouter interface {
+        Route(ctx context.Context, chatID, userID, text string)
+        RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string)
+        RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte)
+        RouteDocShare(ctx context.Context, chatID, userID, docID string)
+        RouteTextWithImages(ctx context.Context, chatID, userID, text string, images []ImageAttachment)
+}
+
+// Downloader downloads images and files from Feishu.
+type Downloader interface {
+        // DownloadImage downloads an image resource from a message.
+        // Uses the MessageResource API since Image.Get only works for bot-uploaded images.
+        DownloadImage(ctx context.Context, messageID, imageKey string) (io.ReadCloser, error)
+        // DownloadFile downloads a file resource from a message.
+        // Returns a reader and the server-provided filename.
+        DownloadFile(ctx context.Context, messageID, fileKey string) (io.ReadCloser, string, error)
+}
+
+const maxImageSize = 10 &lt;&lt; 20 // 10 MB
+const maxFileSize = 50 &lt;&lt; 20  // 50 MB
+
+var feishuDocURLPattern = regexp.MustCompile(`https?://[a-zA-Z0-9.-]*feishu\.cn/docx/([a-zA-Z0-9]+)`)
+
+type Handler struct {
+        router       MessageRouter
+        downloader   Downloader
+        sender       Sender
+        skipBotSelf  bool
+        botID        string
+        allowedUsers map[string]bool
+}
+
+type eventEnvelope struct {
+        Event struct {
+                Sender struct {
+                        SenderType string `json:"sender_type"`
+                        SenderID   struct {
+                                OpenID string `json:"open_id"`
+                                UserID string `json:"user_id"`
+                        } `json:"sender_id"`
+                } `json:"sender"`
+                Message struct {
+                        MessageID   string `json:"message_id"`
+                        ChatID      string `json:"chat_id"`
+                        ChatType    string `json:"chat_type"`
+                        MessageType string `json:"message_type"`
+                        Content     string `json:"content"`
+                        Mentions    []struct {
+                                ID struct {
+                                        OpenID string `json:"open_id"`
+                                } `json:"id"`
+                                Key string `json:"key"`
+                        } `json:"mentions"`
+                } `json:"message"`
+        } `json:"event"`
+}
+
+type textContent struct {
+        Text string `json:"text"`
+}
+
+type imageContent struct {
+        ImageKey string `json:"image_key"`
+}
+
+type fileContent struct {
+        FileKey  string `json:"file_key"`
+        FileName string `json:"file_name"`
+}
+
+// postContent represents the Feishu post (rich text) message structure.
+type postContent struct {
+        Title   string          `json:"title"`
+        Content [][]postElement `json:"content"`
+}
+
+type postElement struct {
+        Tag      string `json:"tag"`
+        Text     string `json:"text,omitempty"`
+        ImageKey string `json:"image_key,omitempty"`
+        Href     string `json:"href,omitempty"`
+}
+
+func NewHandler(router MessageRouter, downloader Downloader, sender Sender, skipBotSelf bool, botID string, allowedUsers map[string]bool) *Handler <span class="cov8" title="1">{
+        return &amp;Handler{
+                router:       router,
+                downloader:   downloader,
+                sender:       sender,
+                skipBotSelf:  skipBotSelf,
+                botID:        botID,
+                allowedUsers: allowedUsers,
+        }
+}</span>
+
+func (h *Handler) HandleMessage(ctx context.Context, evt *larkim.P2MessageReceiveV1) error <span class="cov8" title="1">{
+        data, err := json.Marshal(evt)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">var env eventEnvelope
+        if err := json.Unmarshal(data, &amp;env); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if h.skipBotSelf &amp;&amp; env.Event.Sender.SenderType != "user" </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+
+        <span class="cov8" title="1">if env.Event.Message.ChatType == "group" </span><span class="cov8" title="1">{
+                if !h.isMentioned(env) </span><span class="cov8" title="1">{
+                        return nil
+                }</span>
+        }
+
+        <span class="cov8" title="1">chatID := env.Event.Message.ChatID
+        userID := h.resolveUserID(env)
+        messageID := env.Event.Message.MessageID
+
+        log.Printf("handler: received %s from user=%s chat=%s", env.Event.Message.MessageType, userID, chatID)
+
+        switch env.Event.Message.MessageType </span>{
+        case "text":<span class="cov8" title="1">
+                var content textContent
+                if err := json.Unmarshal([]byte(env.Event.Message.Content), &amp;content); err != nil </span><span class="cov8" title="1">{
+                        return nil
+                }</span>
+                <span class="cov8" title="1">text := h.cleanMentions(content.Text, env)
+                if text == "" </span><span class="cov8" title="1">{
+                        return nil
+                }</span>
+                // Detect feishu doc URL shared as plain text
+                <span class="cov8" title="1">if docID := extractDocID(text); docID != "" &amp;&amp; !strings.HasPrefix(text, "/") </span><span class="cov8" title="1">{
+                        h.router.RouteDocShare(ctx, chatID, userID, docID)
+                        return nil
+                }</span>
+                <span class="cov8" title="1">h.router.Route(ctx, chatID, userID, text)</span>
+
+        case "post":<span class="cov8" title="1">
+                // Rich text messages — extract doc URL if present
+                if docID := extractDocID(env.Event.Message.Content); docID != "" </span><span class="cov8" title="1">{
+                        h.router.RouteDocShare(ctx, chatID, userID, docID)
+                }</span> else<span class="cov8" title="1"> {
+                        h.handlePost(ctx, chatID, userID, messageID, env)
+                }</span>
+
+        case "interactive":<span class="cov8" title="1">
+                // Interactive cards — extract doc URL if present
+                if docID := extractDocID(env.Event.Message.Content); docID != "" </span><span class="cov8" title="1">{
+                        h.router.RouteDocShare(ctx, chatID, userID, docID)
+                }</span>
+
+        case "image":<span class="cov8" title="1">
+                h.handleImage(ctx, chatID, userID, messageID, env.Event.Message.Content)</span>
+
+        case "file":<span class="cov8" title="1">
+                h.handleFile(ctx, chatID, userID, messageID, env.Event.Message.Content)</span>
+        }
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (h *Handler) handleImage(ctx context.Context, chatID, userID, messageID, rawContent string) <span class="cov8" title="1">{
+        var content imageContent
+        if err := json.Unmarshal([]byte(rawContent), &amp;content); err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to parse image content: %v", err)
+                return
+        }</span>
+        <span class="cov8" title="1">if content.ImageKey == "" </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">if h.downloader == nil </span><span class="cov8" title="1">{
+                log.Println("handler: downloader not configured, cannot download image")
+                return
+        }</span>
+
+        <span class="cov8" title="1">reader, err := h.downloader.DownloadImage(ctx, messageID, content.ImageKey)
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to download image %s: %v", content.ImageKey, err)
+                if h.sender != nil </span><span class="cov8" title="1">{
+                        h.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to download image: %v", err))
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+        <span class="cov8" title="1">defer reader.Close()
+
+        data, err := io.ReadAll(io.LimitReader(reader, maxImageSize+1))
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to read image data: %v", err)
+                return
+        }</span>
+        <span class="cov8" title="1">if len(data) &gt; maxImageSize </span><span class="cov8" title="1">{
+                log.Printf("handler: image %s exceeds max size (%d bytes)", content.ImageKey, maxImageSize)
+                if h.sender != nil </span><span class="cov8" title="1">{
+                        h.sender.SendText(ctx, chatID, fmt.Sprintf("Image too large (max %d MB)", maxImageSize&gt;&gt;20))
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+
+        <span class="cov8" title="1">ext := ".png"
+        switch ct := http.DetectContentType(data); </span>{
+        case strings.HasPrefix(ct, "image/jpeg"):<span class="cov8" title="1">
+                ext = ".jpg"</span>
+        case strings.HasPrefix(ct, "image/gif"):<span class="cov8" title="1">
+                ext = ".gif"</span>
+        case strings.HasPrefix(ct, "image/webp"):<span class="cov8" title="1">
+                ext = ".webp"</span>
+        }
+        <span class="cov8" title="1">h.router.RouteImage(ctx, chatID, userID, data, content.ImageKey+ext)</span>
+}
+
+func (h *Handler) handleFile(ctx context.Context, chatID, userID, messageID, rawContent string) <span class="cov8" title="1">{
+        var content fileContent
+        if err := json.Unmarshal([]byte(rawContent), &amp;content); err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to parse file content: %v", err)
+                return
+        }</span>
+        <span class="cov8" title="1">if content.FileKey == "" </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">if h.downloader == nil </span><span class="cov8" title="1">{
+                log.Println("handler: downloader not configured, cannot download file")
+                return
+        }</span>
+
+        <span class="cov8" title="1">reader, serverName, err := h.downloader.DownloadFile(ctx, messageID, content.FileKey)
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to download file %s: %v", content.FileKey, err)
+                if h.sender != nil </span><span class="cov8" title="1">{
+                        h.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to download file: %v", err))
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+        <span class="cov8" title="1">defer reader.Close()
+
+        data, err := io.ReadAll(io.LimitReader(reader, maxFileSize+1))
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to read file data: %v", err)
+                return
+        }</span>
+        <span class="cov8" title="1">if len(data) &gt; maxFileSize </span><span class="cov8" title="1">{
+                log.Printf("handler: file %s exceeds max size (%d bytes)", content.FileKey, maxFileSize)
+                if h.sender != nil </span><span class="cov8" title="1">{
+                        h.sender.SendText(ctx, chatID, fmt.Sprintf("File too large (max %d MB)", maxFileSize&gt;&gt;20))
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+
+        // Prefer the filename from the message content, fallback to server-provided name
+        <span class="cov8" title="1">fileName := content.FileName
+        if fileName == "" </span><span class="cov8" title="1">{
+                fileName = serverName
+        }</span>
+        <span class="cov8" title="1">if fileName == "" </span><span class="cov8" title="1">{
+                fileName = content.FileKey
+        }</span>
+
+        <span class="cov8" title="1">h.router.RouteFile(ctx, chatID, userID, fileName, data)</span>
+}
+
+// resolveUserID returns the sender ID that matches the allowedUsers list.
+// Supports both open_id (ou_xxx) and user_id formats in DEVBOT_ALLOWED_USER_IDS.
+func (h *Handler) resolveUserID(env eventEnvelope) string <span class="cov8" title="1">{
+        openID := env.Event.Sender.SenderID.OpenID
+        if h.allowedUsers[openID] </span><span class="cov8" title="1">{
+                return openID
+        }</span>
+        <span class="cov8" title="1">if uid := env.Event.Sender.SenderID.UserID; uid != "" &amp;&amp; h.allowedUsers[uid] </span><span class="cov8" title="1">{
+                return uid
+        }</span>
+        <span class="cov8" title="1">return openID</span> // fallback to open_id (router will log unauthorized)
+}
+
+func (h *Handler) isMentioned(env eventEnvelope) bool <span class="cov8" title="1">{
+        for _, m := range env.Event.Message.Mentions </span><span class="cov8" title="1">{
+                if m.ID.OpenID == h.botID </span><span class="cov8" title="1">{
+                        return true
+                }</span>
+        }
+        <span class="cov8" title="1">return false</span>
+}
+
+func (h *Handler) cleanMentions(text string, env eventEnvelope) string <span class="cov8" title="1">{
+        for _, m := range env.Event.Message.Mentions </span><span class="cov8" title="1">{
+                text = strings.ReplaceAll(text, m.Key, "")
+        }</span>
+        <span class="cov8" title="1">return strings.TrimSpace(text)</span>
+}
+
+// handlePost extracts text and images from a Feishu post (rich text) message.
+func (h *Handler) handlePost(ctx context.Context, chatID, userID, messageID string, env eventEnvelope) <span class="cov8" title="1">{
+        var pc postContent
+        if err := json.Unmarshal([]byte(env.Event.Message.Content), &amp;pc); err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to parse post content: %v", err)
+                return
+        }</span>
+
+        // Collect text and image keys from all paragraphs
+        <span class="cov8" title="1">var texts []string
+        var imageKeys []string
+        for _, para := range pc.Content </span><span class="cov8" title="1">{
+                for _, elem := range para </span><span class="cov8" title="1">{
+                        switch elem.Tag </span>{
+                        case "text":<span class="cov8" title="1">
+                                if t := strings.TrimSpace(elem.Text); t != "" </span><span class="cov8" title="1">{
+                                        texts = append(texts, t)
+                                }</span>
+                        case "img":<span class="cov8" title="1">
+                                if elem.ImageKey != "" </span><span class="cov8" title="1">{
+                                        imageKeys = append(imageKeys, elem.ImageKey)
+                                }</span>
+                        case "a":<span class="cov8" title="1">
+                                if t := strings.TrimSpace(elem.Text); t != "" </span><span class="cov8" title="1">{
+                                        texts = append(texts, t)
+                                }</span>
+                        }
+                }
+        }
+        <span class="cov8" title="1">if pc.Title != "" </span><span class="cov8" title="1">{
+                texts = append([]string{pc.Title}, texts...)
+        }</span>
+
+        <span class="cov8" title="1">text := h.cleanMentions(strings.Join(texts, "\n"), env)
+
+        // Download images
+        var images []ImageAttachment
+        for _, key := range imageKeys </span><span class="cov8" title="1">{
+                if att := h.downloadPostImageData(ctx, chatID, messageID, key); att != nil </span><span class="cov8" title="1">{
+                        images = append(images, *att)
+                }</span>
+        }
+
+        <span class="cov8" title="1">if text == "" &amp;&amp; len(images) == 0 </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">if len(images) == 0 </span><span class="cov8" title="1">{
+                // Text-only post, route as plain text
+                h.router.Route(ctx, chatID, userID, text)
+        }</span> else<span class="cov8" title="1"> {
+                // Has images (with or without text)
+                h.router.RouteTextWithImages(ctx, chatID, userID, text, images)
+        }</span>
+}
+
+// downloadPostImageData downloads an image from a post message and returns the data.
+func (h *Handler) downloadPostImageData(ctx context.Context, chatID, messageID, imageKey string) *ImageAttachment <span class="cov8" title="1">{
+        if h.downloader == nil </span><span class="cov8" title="1">{
+                log.Println("handler: downloader not configured, cannot download image")
+                return nil
+        }</span>
+
+        <span class="cov8" title="1">reader, err := h.downloader.DownloadImage(ctx, messageID, imageKey)
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to download post image %s: %v", imageKey, err)
+                return nil
+        }</span>
+        <span class="cov8" title="1">defer reader.Close()
+
+        data, err := io.ReadAll(io.LimitReader(reader, maxImageSize+1))
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("handler: failed to read post image data: %v", err)
+                return nil
+        }</span>
+        <span class="cov8" title="1">if len(data) &gt; maxImageSize </span><span class="cov8" title="1">{
+                log.Printf("handler: post image %s exceeds max size", imageKey)
+                return nil
+        }</span>
+
+        <span class="cov8" title="1">ext := ".png"
+        switch ct := http.DetectContentType(data); </span>{
+        case strings.HasPrefix(ct, "image/jpeg"):<span class="cov8" title="1">
+                ext = ".jpg"</span>
+        case strings.HasPrefix(ct, "image/gif"):<span class="cov8" title="1">
+                ext = ".gif"</span>
+        case strings.HasPrefix(ct, "image/webp"):<span class="cov8" title="1">
+                ext = ".webp"</span>
+        }
+
+        <span class="cov8" title="1">return &amp;ImageAttachment{Data: data, FileName: imageKey + ext}</span>
+}
+
+// extractDocID finds the first Feishu doc URL in text and returns the document ID.
+func extractDocID(text string) string <span class="cov8" title="1">{
+        m := feishuDocURLPattern.FindStringSubmatch(text)
+        if len(m) &gt;= 2 </span><span class="cov8" title="1">{
+                return m[1]
+        }</span>
+        <span class="cov8" title="1">return ""</span>
+}
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">package bot
+
+import (
+        "context"
+        "fmt"
+        "io"
+
+        lark "github.com/larksuite/oapi-sdk-go/v3"
+        larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+)
+
+// LarkDownloader implements Downloader using the Lark SDK.
+// It uses the MessageResource API for both images and files,
+// since Image.Get only works for bot-uploaded images.
+type LarkDownloader struct {
+        client *lark.Client
+}
+
+func NewLarkDownloader(client *lark.Client) *LarkDownloader <span class="cov0" title="0">{
+        return &amp;LarkDownloader{client: client}
+}</span>
+
+// DownloadImage downloads an image from a message using the MessageResource API.
+// The Image.Get API only works for bot-uploaded images, so we use MessageResource.Get
+// with type=image to download user-sent images.
+func (d *LarkDownloader) DownloadImage(ctx context.Context, messageID, imageKey string) (io.ReadCloser, error) <span class="cov0" title="0">{
+        req := larkim.NewGetMessageResourceReqBuilder().
+                MessageId(messageID).
+                FileKey(imageKey).
+                Type("image").
+                Build()
+
+        resp, err := d.client.Im.MessageResource.Get(ctx, req)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("lark API error: %w", err)
+        }</span>
+        <span class="cov0" title="0">if !resp.Success() </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("lark API failed: code=%d msg=%s", resp.Code, resp.Msg)
+        }</span>
+
+        <span class="cov0" title="0">return asReadCloser(resp.File), nil</span>
+}
+
+// DownloadFile downloads a file from a message using the MessageResource API.
+// Returns a reader and the server-provided filename.
+func (d *LarkDownloader) DownloadFile(ctx context.Context, messageID, fileKey string) (io.ReadCloser, string, error) <span class="cov0" title="0">{
+        req := larkim.NewGetMessageResourceReqBuilder().
+                MessageId(messageID).
+                FileKey(fileKey).
+                Type("file").
+                Build()
+
+        resp, err := d.client.Im.MessageResource.Get(ctx, req)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, "", fmt.Errorf("lark API error: %w", err)
+        }</span>
+        <span class="cov0" title="0">if !resp.Success() </span><span class="cov0" title="0">{
+                return nil, "", fmt.Errorf("lark API failed: code=%d msg=%s", resp.Code, resp.Msg)
+        }</span>
+
+        <span class="cov0" title="0">return asReadCloser(resp.File), resp.FileName, nil</span>
+}
+
+// asReadCloser returns r as io.ReadCloser. If r already implements
+// io.ReadCloser it is returned directly to avoid double-wrapping
+// (and leaking the underlying resource). Otherwise it is wrapped
+// with io.NopCloser.
+func asReadCloser(r io.Reader) io.ReadCloser <span class="cov0" title="0">{
+        if rc, ok := r.(io.ReadCloser); ok </span><span class="cov0" title="0">{
+                return rc
+        }</span>
+        <span class="cov0" title="0">return io.NopCloser(r)</span>
+}
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">package bot
+
+import (
+        "fmt"
+        "sync"
+        "sync/atomic"
+)
+
+type MessageQueue struct {
+        mu     sync.Mutex
+        queues map[string]chan func()
+        counts map[string]*int32
+        wg     sync.WaitGroup
+}
+
+func NewMessageQueue() *MessageQueue <span class="cov8" title="1">{
+        return &amp;MessageQueue{
+                queues: make(map[string]chan func()),
+                counts: make(map[string]*int32),
+        }
+}</span>
+
+func (q *MessageQueue) Enqueue(chatID string, task func()) error <span class="cov8" title="1">{
+        q.mu.Lock()
+        ch, ok := q.queues[chatID]
+        cnt := q.counts[chatID]
+        if !ok </span><span class="cov8" title="1">{
+                ch = make(chan func(), 100)
+                cnt = new(int32)
+                q.counts[chatID] = cnt
+                q.queues[chatID] = ch
+                q.wg.Add(1)
+                go q.worker(cnt, ch)
+        }</span>
+        <span class="cov8" title="1">q.mu.Unlock()
+
+        atomic.AddInt32(cnt, 1)
+        select </span>{
+        case ch &lt;- task:<span class="cov8" title="1">
+                return nil</span>
+        default:<span class="cov8" title="1">
+                atomic.AddInt32(cnt, -1)
+                return fmt.Errorf("queue full for chat %s", chatID)</span>
+        }
+}
+
+func (q *MessageQueue) worker(cnt *int32, ch chan func()) <span class="cov8" title="1">{
+        defer q.wg.Done()
+        for task := range ch </span><span class="cov8" title="1">{
+                task()
+                atomic.AddInt32(cnt, -1)
+        }</span>
+}
+
+func (q *MessageQueue) PendingCount(chatID string) int <span class="cov8" title="1">{
+        q.mu.Lock()
+        cnt := q.counts[chatID]
+        q.mu.Unlock()
+        if cnt == nil </span><span class="cov8" title="1">{
+                return 0
+        }</span>
+        <span class="cov8" title="1">return int(atomic.LoadInt32(cnt))</span>
+}
+
+// Shutdown closes all channels and waits for workers to finish in-flight tasks.
+func (q *MessageQueue) Shutdown() <span class="cov8" title="1">{
+        q.mu.Lock()
+        for _, ch := range q.queues </span><span class="cov8" title="1">{
+                close(ch)
+        }</span>
+        <span class="cov8" title="1">q.mu.Unlock()
+
+        q.wg.Wait()
+
+        q.mu.Lock()
+        q.queues = make(map[string]chan func())
+        q.counts = make(map[string]*int32)
+        q.mu.Unlock()</span>
+}
+</pre>
+		
+		<pre class="file" id="file7" style="display: none">package bot
+
+import (
+        "bytes"
+        "context"
+        "fmt"
+        "log"
+        "os"
+        "os/exec"
+        "path/filepath"
+        "strings"
+        "time"
+
+        "devbot/internal/version"
+)
+
+type Router struct {
+        executor     *ClaudeExecutor
+        store        *Store
+        sender       Sender
+        allowedUsers map[string]bool
+        startTime    time.Time
+        queue        *MessageQueue
+        docSyncer    DocPusher
+        ctx          context.Context
+}
+
+func NewRouter(ctx context.Context, executor *ClaudeExecutor, store *Store, sender Sender, allowedUsers map[string]bool, workRoot string, docSyncer DocPusher) *Router <span class="cov8" title="1">{
+        if store.WorkRoot() == "" </span><span class="cov8" title="1">{
+                store.SetWorkRoot(workRoot)
+        }</span>
+        <span class="cov8" title="1">return &amp;Router{
+                executor:     executor,
+                store:        store,
+                sender:       sender,
+                allowedUsers: allowedUsers,
+                startTime:    time.Now(),
+                docSyncer:    docSyncer,
+                ctx:          ctx,
+        }</span>
+}
+
+func (r *Router) SetQueue(q *MessageQueue) <span class="cov8" title="1">{
+        r.queue = q
+}</span>
+
+func (r *Router) save() <span class="cov8" title="1">{
+        if err := r.store.Save(); err != nil </span><span class="cov8" title="1">{
+                log.Printf("router: failed to save state: %v", err)
+        }</span>
+}
+
+func (r *Router) Route(ctx context.Context, chatID, userID, text string) <span class="cov8" title="1">{
+        if !r.allowedUsers[userID] </span><span class="cov8" title="1">{
+                log.Printf("router: unauthorized user=%s, ignoring", userID)
+                return
+        }</span>
+
+        <span class="cov8" title="1">text = strings.TrimSpace(text)
+        if text == "" </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">if strings.HasPrefix(text, "/") </span><span class="cov8" title="1">{
+                log.Printf("router: command %s from chat=%s", strings.SplitN(text, " ", 2)[0], chatID)
+                r.handleCommand(ctx, chatID, text)
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.handlePrompt(ctx, chatID, text)</span>
+}
+
+func (r *Router) handleCommand(ctx context.Context, chatID, text string) <span class="cov8" title="1">{
+        parts := strings.SplitN(text, " ", 2)
+        cmd := strings.ToLower(parts[0])
+        args := ""
+        if len(parts) &gt; 1 </span><span class="cov8" title="1">{
+                args = strings.TrimSpace(parts[1])
+        }</span>
+
+        <span class="cov8" title="1">switch cmd </span>{
+        case "/help":<span class="cov8" title="1">
+                r.cmdHelp(ctx, chatID)</span>
+        case "/ping":<span class="cov8" title="1">
+                r.cmdPing(ctx, chatID)</span>
+        case "/version":<span class="cov8" title="1">
+                r.cmdVersion(ctx, chatID)</span>
+        case "/status":<span class="cov8" title="1">
+                r.cmdStatus(ctx, chatID)</span>
+        case "/pwd":<span class="cov8" title="1">
+                r.cmdPwd(ctx, chatID)</span>
+        case "/ls":<span class="cov8" title="1">
+                r.cmdLs(ctx, chatID)</span>
+        case "/root":<span class="cov8" title="1">
+                r.cmdRoot(ctx, chatID, args)</span>
+        case "/cd":<span class="cov8" title="1">
+                r.cmdCd(ctx, chatID, args)</span>
+        case "/new":<span class="cov8" title="1">
+                r.cmdNewSession(ctx, chatID)</span>
+        case "/sessions":<span class="cov8" title="1">
+                r.cmdSessions(ctx, chatID)</span>
+        case "/switch":<span class="cov8" title="1">
+                r.cmdSwitch(ctx, chatID, args)</span>
+        case "/kill":<span class="cov8" title="1">
+                r.cmdKill(ctx, chatID)</span>
+        case "/model":<span class="cov8" title="1">
+                r.cmdModel(ctx, chatID, args)</span>
+        case "/yolo":<span class="cov8" title="1">
+                r.cmdYolo(ctx, chatID)</span>
+        case "/safe":<span class="cov8" title="1">
+                r.cmdSafe(ctx, chatID)</span>
+        case "/last":<span class="cov8" title="1">
+                r.cmdLast(ctx, chatID)</span>
+        case "/summary":<span class="cov8" title="1">
+                r.cmdSummary(ctx, chatID)</span>
+        case "/git":<span class="cov8" title="1">
+                r.cmdGit(ctx, chatID, args)</span>
+        case "/diff":<span class="cov8" title="1">
+                r.cmdGit(ctx, chatID, "diff")</span>
+        case "/commit":<span class="cov8" title="1">
+                r.cmdCommit(ctx, chatID, args)</span>
+        case "/push":<span class="cov8" title="1">
+                r.cmdGit(ctx, chatID, "push")</span>
+        case "/undo":<span class="cov8" title="1">
+                r.cmdUndo(ctx, chatID)</span>
+        case "/stash":<span class="cov8" title="1">
+                if args == "" </span><span class="cov8" title="1">{
+                        r.cmdGit(ctx, chatID, "stash")
+                }</span> else<span class="cov8" title="1"> {
+                        r.cmdGit(ctx, chatID, "stash "+args)
+                }</span>
+        case "/log":<span class="cov8" title="1">
+                r.cmdLog(ctx, chatID, args)</span>
+        case "/branch":<span class="cov8" title="1">
+                r.cmdBranch(ctx, chatID, args)</span>
+        case "/cancel":<span class="cov8" title="1">
+                r.cmdKill(ctx, chatID)</span>
+        case "/retry":<span class="cov8" title="1">
+                r.cmdRetry(ctx, chatID)</span>
+        case "/info":<span class="cov8" title="1">
+                r.cmdInfo(ctx, chatID)</span>
+        case "/grep":<span class="cov8" title="1">
+                r.cmdGrep(ctx, chatID, args)</span>
+        case "/pr":<span class="cov8" title="1">
+                r.cmdPR(ctx, chatID, args)</span>
+        case "/compact":<span class="cov8" title="1">
+                r.cmdCompact(ctx, chatID)</span>
+        case "/find":<span class="cov8" title="1">
+                r.cmdFind(ctx, chatID, args)</span>
+        case "/test":<span class="cov8" title="1">
+                r.cmdTest(ctx, chatID, args)</span>
+        case "/recent":<span class="cov8" title="1">
+                r.cmdRecent(ctx, chatID, args)</span>
+        case "/debug":<span class="cov8" title="1">
+                r.cmdDebug(ctx, chatID)</span>
+        case "/sh":<span class="cov8" title="1">
+                r.cmdSh(ctx, chatID, args)</span>
+        case "/file":<span class="cov8" title="1">
+                r.cmdFile(ctx, chatID, args)</span>
+        case "/doc":<span class="cov8" title="1">
+                r.cmdDoc(ctx, chatID, args)</span>
+        default:<span class="cov8" title="1">
+                msg := fmt.Sprintf("未知命令: %s\n\n使用 /help 查看所有可用命令。", cmd)
+                if suggestion := suggestCommand(cmd); suggestion != "" </span><span class="cov8" title="1">{
+                        msg = fmt.Sprintf("未知命令: %s\n\n你是否想用 `%s`？\n\n使用 /help 查看完整命令列表。", cmd, suggestion)
+                }</span>
+                <span class="cov8" title="1">r.sender.SendText(ctx, chatID, msg)</span>
+        }
+}
+
+func (r *Router) getSession(chatID string) Session <span class="cov8" title="1">{
+        return r.store.GetSession(chatID, r.store.WorkRoot(), r.executor.Model())
+}</span>
+
+func (r *Router) cmdHelp(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        md := "**🗺 导航:**\n" +
+                "`/info`  快速概览（目录、分支、变更、状态）\n" +
+                "`/root [path]`  查看/设置根工作目录\n" +
+                "`/cd &lt;dir&gt;`  切换项目目录（支持相对路径）\n" +
+                "`/pwd`  显示当前目录\n" +
+                "`/ls`  列出根目录下的项目\n\n" +
+                "**🤖 Claude 对话:**\n" +
+                "`/status`  查看详细状态（含 git 信息）\n" +
+                "`/new`  开启新对话（保留当前会话到历史）\n" +
+                "`/kill`  终止正在执行的任务\n" +
+                "`/cancel`  同 /kill，终止当前任务\n" +
+                "`/retry`  重试上一条发给 Claude 的消息\n" +
+                "`/last`  显示上次输出\n" +
+                "`/summary`  让 Claude 总结上次输出\n" +
+                "`/compact`  压缩当前对话上下文（节省 token，延长会话）\n" +
+                "`/model [name]`  查看/切换模型（haiku/sonnet/opus）\n" +
+                "`/yolo`  开启无限制模式（Claude 可执行所有操作）\n" +
+                "`/safe`  恢复安全模式\n\n" +
+                "**🔀 历史会话:**\n" +
+                "`/sessions`  查看历史会话列表\n" +
+                "`/switch &lt;id&gt;`  切换到指定历史会话\n\n" +
+                "**🔧 Git:**\n" +
+                "`/diff`  查看当前变更\n" +
+                "`/log [n]`  查看提交历史（默认最近 20 条）\n" +
+                "`/branch [name]`  查看分支列表或切换/创建分支\n" +
+                "`/commit [msg]`  提交（不填消息则 Claude 自动生成）\n" +
+                "`/push`  推送到远程\n" +
+                "`/pr [title]`  创建 Pull Request\n" +
+                "`/undo`  ⚠️ 撤销所有未提交的更改（无变更时提示而非执行）\n" +
+                "`/stash [pop]`  暂存/恢复更改\n" +
+                "`/git &lt;args&gt;`  执行任意 git 命令\n\n" +
+                "**📁 文件与搜索:**\n" +
+                "`/grep &lt;pattern&gt;`  在代码中搜索关键词（内容搜索）\n" +
+                "`/find &lt;name&gt;`  按文件名查找文件（支持通配符，如 *.go）\n" +
+                "`/test [pattern]`  运行项目测试（自动识别 Go/Node/Python/Rust）\n" +
+                "`/recent [n]`  列出最近修改的 n 个文件（默认 10 个）\n" +
+                "`/debug`  分析上次输出中的错误并给出修复建议\n" +
+                "`/file &lt;path&gt;`  查看项目文件内容\n" +
+                "`/sh &lt;cmd&gt;`  通过 Claude 执行 Shell 命令\n\n" +
+                "**📄 飞书文档同步:**\n" +
+                "`/doc push &lt;path&gt;`  将 Markdown 文件推送到飞书文档\n" +
+                "`/doc pull &lt;path&gt;`  将飞书文档内容拉取到本地文件\n" +
+                "`/doc bind &lt;path&gt; &lt;url|id&gt;`  绑定本地文件到飞书文档\n" +
+                "`/doc unbind &lt;path&gt;`  解除绑定\n" +
+                "`/doc list`  查看所有绑定关系\n\n" +
+                "**💬 其他:**\n" +
+                "`/ping`  检查机器人是否在线\n" +
+                "`/version`  显示版本信息（版本号、Commit、构建时间）\n" +
+                "`/help`  显示此帮助\n\n" +
+                "直接发送文字即可与 Claude 对话，也可发送图片或文件。"
+        r.sender.SendCard(ctx, chatID, CardMsg{Title: "DevBot 使用指南", Content: md})
+}</span>
+
+func (r *Router) cmdPing(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        uptime := time.Since(r.startTime).Truncate(time.Second)
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("pong ✓ (已运行 %s)", uptime))
+}</span>
+
+func (r *Router) cmdVersion(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        r.sender.SendText(ctx, chatID, version.String())
+}</span>
+
+func (r *Router) cmdStatus(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        uptime := time.Since(r.startTime).Truncate(time.Second)
+        mode := session.PermissionMode
+        if mode == "" </span><span class="cov8" title="1">{
+                mode = "safe"
+        }</span>
+
+        <span class="cov8" title="1">var queuePending int
+        if r.queue != nil </span><span class="cov8" title="1">{
+                queuePending = r.queue.PendingCount(chatID)
+        }</span>
+
+        <span class="cov8" title="1">lastExec := r.executor.LastExecDuration().Truncate(time.Millisecond)
+        lastExecStr := "-"
+        if r.executor.ExecCount() &gt; 0 </span><span class="cov8" title="1">{
+                lastExecStr = lastExec.String()
+        }</span>
+
+        <span class="cov8" title="1">runningStr := "空闲"
+        if r.executor.IsRunning() </span><span class="cov8" title="1">{
+                runningStr = "执行中..."
+        }</span>
+        <span class="cov8" title="1">sessionStr := session.ClaudeSessionID
+        if sessionStr == "" </span><span class="cov8" title="1">{
+                sessionStr = "（新会话）"
+        }</span>
+        <span class="cov8" title="1">branch := gitBranch(session.WorkDir)
+        branchStr := branch
+        if branchStr == "" </span><span class="cov8" title="1">{
+                branchStr = "（非 git 目录）"
+        }</span>
+        <span class="cov8" title="1">changes := gitStatusSummary(session.WorkDir)
+        if changes == "" </span><span class="cov8" title="1">{
+                changes = "（非 git 目录）"
+        }</span>
+        <span class="cov8" title="1">md := fmt.Sprintf("**工作目录:** `%s`\n**Git 分支:**  %s\n**工作区:**    %s\n**会话 ID:**   `%s`\n**模型:**      %s\n**模式:**      %s\n**状态:**      %s\n**执行次数:** %d\n**上次耗时:** %s\n**待执行队列:** %d\n**运行时长:** %s",
+                session.WorkDir,
+                branchStr,
+                changes,
+                sessionStr,
+                session.Model,
+                mode,
+                runningStr,
+                r.executor.ExecCount(),
+                lastExecStr,
+                queuePending,
+                uptime,
+        )
+        r.sender.SendCard(ctx, chatID, CardMsg{Title: "当前状态", Content: md})</span>
+}
+
+func (r *Router) cmdPwd(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        r.sender.SendText(ctx, chatID, session.WorkDir)
+}</span>
+
+func (r *Router) cmdLs(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        root := r.store.WorkRoot()
+        entries, err := os.ReadDir(root)
+        if err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("读取目录出错: %v", err))
+                return
+        }</span>
+        <span class="cov8" title="1">var dirs []string
+        for _, e := range entries </span><span class="cov8" title="1">{
+                if e.IsDir() &amp;&amp; !strings.HasPrefix(e.Name(), ".") </span><span class="cov8" title="1">{
+                        dirs = append(dirs, e.Name())
+                }</span>
+        }
+        <span class="cov8" title="1">if len(dirs) == 0 </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("根目录 %s 下暂无项目目录。\n使用 /cd &lt;目录名&gt; 切换到指定目录。", root))
+                return
+        }</span>
+        <span class="cov8" title="1">r.sender.SendCard(ctx, chatID, CardMsg{
+                Title:   fmt.Sprintf("项目列表 (%s)", root),
+                Content: strings.Join(dirs, "\n"),
+        })</span>
+}
+
+func (r *Router) cmdRoot(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "当前根目录: "+r.store.WorkRoot())
+                return
+        }</span>
+        <span class="cov8" title="1">if !filepath.IsAbs(args) </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "根目录必须是绝对路径，例如: /home/user/projects")
+                return
+        }</span>
+        <span class="cov8" title="1">cleaned := filepath.Clean(args)
+        if cleaned == "/" || strings.HasPrefix(cleaned, "/etc") ||
+                strings.HasPrefix(cleaned, "/var") || strings.HasPrefix(cleaned, "/usr") ||
+                strings.HasPrefix(cleaned, "/sys") || strings.HasPrefix(cleaned, "/proc") </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "不允许将系统目录设为根目录。")
+                return
+        }</span>
+        <span class="cov8" title="1">info, err := os.Stat(args)
+        if err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("目录不存在: %s", args))
+                return
+        }</span>
+        <span class="cov8" title="1">if !info.IsDir() </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("不是目录: %s", args))
+                return
+        }</span>
+        <span class="cov8" title="1">r.store.SetWorkRoot(args)
+        r.save()
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 根目录已设置为: %s", args))</span>
+}
+
+func (r *Router) cmdCd(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /cd &lt;目录名&gt;\n示例: /cd myproject\n\n使用 /ls 查看可用项目列表。")
+                return
+        }</span>
+        <span class="cov8" title="1">r.getSession(chatID) // ensure session exists
+        root := r.store.WorkRoot()
+
+        var target string
+        if filepath.IsAbs(args) </span><span class="cov8" title="1">{
+                target = args
+        }</span> else<span class="cov8" title="1"> {
+                target = filepath.Join(root, args)
+        }</span>
+        <span class="cov8" title="1">target = filepath.Clean(target)
+
+        // Prevent path traversal outside work root
+        if !underRoot(root, target) </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "不允许切换到工作根目录以外的路径: "+root)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if _, err := os.Stat(target); err != nil </span><span class="cov8" title="1">{
+                // Show available subdirectories to help user navigate
+                msg := fmt.Sprintf("目录不存在: %s", target)
+                if entries, readErr := os.ReadDir(root); readErr == nil </span><span class="cov8" title="1">{
+                        var dirs []string
+                        for _, e := range entries </span><span class="cov8" title="1">{
+                                if e.IsDir() &amp;&amp; !strings.HasPrefix(e.Name(), ".") </span><span class="cov8" title="1">{
+                                        dirs = append(dirs, e.Name())
+                                }</span>
+                        }
+                        <span class="cov8" title="1">if len(dirs) &gt; 0 </span><span class="cov8" title="1">{
+                                msg += "\n\n可用目录:\n" + strings.Join(dirs, "  /  ")
+                        }</span>
+                }
+                <span class="cov8" title="1">r.sender.SendText(ctx, chatID, msg)
+                return</span>
+        }
+        <span class="cov8" title="1">r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                // Save current dir's session before switching
+                if s.DirSessions == nil </span><span class="cov8" title="1">{
+                        s.DirSessions = make(map[string]string)
+                }</span>
+                <span class="cov8" title="1">if s.ClaudeSessionID != "" &amp;&amp; s.WorkDir != "" </span><span class="cov8" title="1">{
+                        s.DirSessions[s.WorkDir] = s.ClaudeSessionID
+                }</span>
+                // Restore session for the new directory (empty string = new session)
+                <span class="cov8" title="1">s.ClaudeSessionID = s.DirSessions[target]
+                s.WorkDir = target
+                s.LastOutput = ""</span>
+        })
+        <span class="cov8" title="1">r.save()
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已切换到: %s", target))</span>
+}
+
+func (r *Router) cmdNewSession(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        var oldSessionID string
+        r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                oldSessionID = s.ClaudeSessionID
+                if s.ClaudeSessionID != "" </span><span class="cov8" title="1">{
+                        s.History = append(s.History, s.ClaudeSessionID)
+                }</span>
+                <span class="cov8" title="1">s.ClaudeSessionID = ""
+                s.LastOutput = ""</span>
+        })
+        <span class="cov8" title="1">r.save()
+        if oldSessionID != "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("已开启新对话。旧会话 %s 已保存到历史，可用 /sessions 查看或 /switch 恢复。", oldSessionID))
+        }</span> else<span class="cov8" title="1"> {
+                r.sender.SendText(ctx, chatID, "已开启新对话。")
+        }</span>
+}
+
+func (r *Router) cmdSessions(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        if len(session.History) == 0 &amp;&amp; session.ClaudeSessionID == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "暂无历史会话。发送消息后会自动创建会话。")
+                return
+        }</span>
+        // Build reverse map: sessionID -&gt; workDir for context display
+        <span class="cov8" title="1">reverseDir := make(map[string]string)
+        for dir, sid := range session.DirSessions </span><span class="cov8" title="1">{
+                reverseDir[sid] = dir
+        }</span>
+        <span class="cov8" title="1">var lines []string
+        for i, id := range session.History </span><span class="cov8" title="1">{
+                dirHint := ""
+                if dir, ok := reverseDir[id]; ok &amp;&amp; dir != "" </span><span class="cov8" title="1">{
+                        dirHint = " `" + filepath.Base(dir) + "`"
+                }</span>
+                <span class="cov8" title="1">lines = append(lines, fmt.Sprintf("  `%d`:%s `%s`  → `/switch %d`", i, dirHint, id, i))</span>
+        }
+        <span class="cov8" title="1">if session.ClaudeSessionID != "" </span><span class="cov8" title="1">{
+                dirHint := ""
+                if dir, ok := reverseDir[session.ClaudeSessionID]; ok &amp;&amp; dir != "" </span><span class="cov8" title="1">{
+                        dirHint = " `" + filepath.Base(dir) + "`"
+                }</span>
+                <span class="cov8" title="1">lines = append(lines, fmt.Sprintf("\n**当前:%s** `%s`", dirHint, session.ClaudeSessionID))</span>
+        }
+        <span class="cov8" title="1">r.sender.SendCard(ctx, chatID, CardMsg{Title: "历史会话", Content: strings.Join(lines, "\n")})</span>
+}
+
+func (r *Router) cmdSwitch(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /switch &lt;序号或会话ID&gt;\n\n使用 /sessions 查看可用会话列表。")
+                return
+        }</span>
+        <span class="cov8" title="1">r.getSession(chatID) // ensure session exists
+
+        // Support switching by index (from /sessions list)
+        targetID := args
+        if idx, err := fmt.Sscanf(args, "%d", new(int)); err == nil &amp;&amp; idx == 1 </span><span class="cov8" title="1">{
+                var idxVal int
+                fmt.Sscanf(args, "%d", &amp;idxVal)
+                session := r.getSession(chatID)
+                if idxVal &gt;= 0 &amp;&amp; idxVal &lt; len(session.History) </span><span class="cov8" title="1">{
+                        targetID = session.History[idxVal]
+                }</span> else<span class="cov8" title="1"> {
+                        r.sender.SendText(ctx, chatID, fmt.Sprintf("序号 %d 不存在，请用 /sessions 查看有效序号。", idxVal))
+                        return
+                }</span>
+        }
+
+        <span class="cov8" title="1">r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                if s.ClaudeSessionID != "" </span><span class="cov8" title="1">{
+                        s.History = append(s.History, s.ClaudeSessionID)
+                }</span>
+                <span class="cov8" title="1">s.ClaudeSessionID = targetID
+                s.LastOutput = ""</span>
+        })
+        <span class="cov8" title="1">r.save()
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已切换到会话: %s", targetID))</span>
+}
+
+func (r *Router) cmdKill(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        if err := r.executor.Kill(); err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "当前没有正在执行的任务。")
+                return
+        }</span>
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, "✓ 任务已终止。")</span>
+}
+
+func (r *Router) cmdModel(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                session := r.getSession(chatID)
+                current := session.Model
+                if current == "" </span><span class="cov8" title="1">{
+                        current = r.executor.Model()
+                }</span>
+                <span class="cov8" title="1">md := fmt.Sprintf("**当前模型:** `%s`\n\n**可选模型:**\n", current) +
+                        "- `haiku`  最快，适合简单任务和代码补全\n" +
+                        "- `sonnet`  均衡，推荐日常使用\n" +
+                        "- `opus`  最强，适合复杂推理和长任务\n\n" +
+                        "使用 `/model &lt;名称&gt;` 切换，例如 `/model opus`"
+                r.sender.SendCard(ctx, chatID, CardMsg{Title: "模型设置", Content: md})
+                return</span>
+        }
+        <span class="cov8" title="1">r.getSession(chatID) // ensure session exists
+        r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                s.Model = args
+        }</span>)
+        <span class="cov8" title="1">r.save()
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 模型已切换为: %s", args))</span>
+}
+
+func (r *Router) cmdYolo(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                s.PermissionMode = "yolo"
+        }</span>)
+        <span class="cov8" title="1">r.save()
+        md := "⚠️ **已开启无限制模式（YOLO）**\n\n" +
+                "Claude 现在可以执行所有操作，包括：\n" +
+                "- 运行任意 Shell 命令\n" +
+                "- 修改、删除文件\n" +
+                "- 访问网络\n\n" +
+                "使用 `/safe` 恢复安全模式。"
+        r.sender.SendCard(ctx, chatID, CardMsg{Title: "⚠️ 无限制模式已开启", Content: md, Template: "orange"})</span>
+}
+
+func (r *Router) cmdSafe(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                s.PermissionMode = "safe"
+        }</span>)
+        <span class="cov8" title="1">r.save()
+        r.sender.SendText(ctx, chatID, "✓ 已恢复安全模式，Claude 的操作需要确认。")</span>
+}
+
+func (r *Router) cmdLast(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        if session.LastOutput == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "暂无历史输出，请先发送消息给 Claude。")
+                return
+        }</span>
+        <span class="cov8" title="1">r.sender.SendTextChunked(ctx, chatID, session.LastOutput)</span>
+}
+
+func (r *Router) cmdSummary(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        if session.LastOutput == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "暂无可总结的输出，请先发送消息给 Claude。")
+                return
+        }</span>
+        <span class="cov8" title="1">prompt := "Please summarize the following output concisely:\n\n" + truncateForDisplay(session.LastOutput, 4000)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdCommit(ctx context.Context, chatID, msg string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        var prompt string
+        if msg == "" </span><span class="cov8" title="1">{
+                prompt = "Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then write a concise commit message based on the changes (`git diff --cached`), and commit. Only show the final commit output, no explanation."
+        }</span> else<span class="cov8" title="1"> {
+                prompt = fmt.Sprintf("Stage tracked file changes with `git add -u` (do NOT use `git add -A` to avoid staging untracked files), then commit with the message: %s\nOnly show the command output, no explanation.", msg)
+        }</span>
+        <span class="cov8" title="1">r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdGit(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        prompt := fmt.Sprintf("Run `git %s` in the current directory and return the output. Only show the command output, no explanation.", args)
+        r.execClaudeQueued(ctx, chatID, prompt)
+}</span>
+
+func (r *Router) cmdUndo(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        changes := gitStatusSummary(r.store.GetSession(chatID, r.store.WorkRoot(), r.executor.Model()).WorkDir)
+        if changes == "无变更" || changes == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "当前没有未提交的更改，无需撤销。")
+                return
+        }</span>
+        <span class="cov8" title="1">prompt := fmt.Sprintf("⚠️ 即将撤销所有未提交的更改（%s）。运行 `git checkout .` 撤销工作目录变更（已暂存的变更不受影响）。只输出命令结果，不要解释。", changes)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdLog(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        count := "20"
+        if args != "" </span><span class="cov8" title="1">{
+                count = args
+        }</span>
+        <span class="cov8" title="1">prompt := fmt.Sprintf("Run `git log --oneline -%s` in the current directory and return the output. Only show the command output, no explanation.", count)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdBranch(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        if args == "" </span><span class="cov8" title="1">{
+                prompt := "Run `git branch -v` in the current directory and return the output, showing which branch is current. Only show the command output, no explanation."
+                r.execClaudeQueued(ctx, chatID, prompt)
+                return
+        }</span>
+        // Create new branch or switch to existing
+        <span class="cov8" title="1">prompt := fmt.Sprintf("Run `git checkout -b %s 2&gt;/dev/null || git checkout %s` in the current directory and return the output. Only show the command output, no explanation.", args, args)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdRetry(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        if session.LastPrompt == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "没有可重试的请求。")
+                return
+        }</span>
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, fmt.Sprintf("重试: %s", session.LastPrompt))
+        r.execClaudeQueued(ctx, chatID, session.LastPrompt)</span>
+}
+
+func (r *Router) cmdInfo(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        mode := session.PermissionMode
+        if mode == "" </span><span class="cov8" title="1">{
+                mode = "safe"
+        }</span>
+        <span class="cov8" title="1">branch := gitBranch(session.WorkDir)
+        if branch == "" </span><span class="cov8" title="1">{
+                branch = "（非 git 目录）"
+        }</span>
+        <span class="cov8" title="1">changes := gitStatusSummary(session.WorkDir)
+        if changes == "" </span><span class="cov8" title="1">{
+                changes = "（非 git 目录）"
+        }</span>
+        <span class="cov8" title="1">runningStr := "空闲"
+        if r.executor.IsRunning() </span><span class="cov8" title="1">{
+                runningStr = "执行中..."
+        }</span>
+        <span class="cov8" title="1">md := fmt.Sprintf("📂 `%s`\n🌿 %s | 📝 %s\n🤖 %s | 🔒 %s | ⚡ %s",
+                session.WorkDir, branch, changes, session.Model, mode, runningStr)
+        r.sender.SendCard(ctx, chatID, CardMsg{Title: "当前概览", Content: md})</span>
+}
+
+func (r *Router) cmdGrep(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /grep &lt;关键词&gt;\n示例: /grep TODO\n示例: /grep func main")
+                return
+        }</span>
+        <span class="cov8" title="1">r.getSession(chatID) // ensure session exists
+        prompt := fmt.Sprintf("Run `grep -rn --include='*.go' --include='*.ts' --include='*.py' --include='*.js' -l %q .` in the current directory, then show the top matching lines. Only show the command output, no explanation.", args)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdPR(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        var prompt string
+        if args == "" </span><span class="cov8" title="1">{
+                prompt = "Create a pull request using `gh pr create` with an auto-generated title and body based on the current branch changes. Only show the PR URL in the output, no extra explanation."
+        }</span> else<span class="cov8" title="1"> {
+                prompt = fmt.Sprintf("Create a pull request using `gh pr create --title %q` with an auto-generated body based on the current branch changes. Only show the PR URL in the output, no extra explanation.", args)
+        }</span>
+        <span class="cov8" title="1">r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdCompact(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        prompt := "Please summarize our conversation so far into a concise context summary. Include: current task, key decisions made, files modified, and next steps. Keep it brief (under 300 words). This will help continue our work efficiently."
+        r.execClaudeQueued(ctx, chatID, prompt)
+}</span>
+
+func (r *Router) cmdFind(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /find &lt;文件名模式&gt;\n示例: /find main.go\n示例: /find *.ts")
+                return
+        }</span>
+        <span class="cov8" title="1">r.getSession(chatID) // ensure session exists
+        prompt := fmt.Sprintf("Run `find . -name %q -not -path '*/node_modules/*' -not -path '*/.git/*' | head -30` in the current directory and return the matching file paths. Only show the output, no explanation.", args)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdTest(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        var prompt string
+        if args == "" </span><span class="cov8" title="1">{
+                prompt = "Detect the project type and run its tests: `go test ./... 2&gt;&amp;1` for Go, `npm test 2&gt;&amp;1` for Node, `pytest 2&gt;&amp;1` for Python, `cargo test 2&gt;&amp;1` for Rust. Show test results focused on failures. Only show the command output, no explanation."
+        }</span> else<span class="cov8" title="1"> {
+                prompt = fmt.Sprintf("Run tests matching %q: try `go test ./... -run %q 2&gt;&amp;1`, or `npm test -- --grep %q 2&gt;&amp;1`, or `pytest -k %q 2&gt;&amp;1`. Show results focused on failures. Only show the command output.", args, args, args, args)
+        }</span>
+        <span class="cov8" title="1">r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdDebug(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        session := r.getSession(chatID)
+        if session.LastOutput == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "暂无上次输出可分析。先执行一个命令再使用 /debug。")
+                return
+        }</span>
+        <span class="cov8" title="1">trimmed := truncateForDisplay(session.LastOutput, 3000)
+        prompt := fmt.Sprintf("分析以下输出，用中文解释错误原因，并给出具体的修复建议：\n\n```\n%s\n```", trimmed)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdRecent(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        n := "10"
+        if args != "" </span><span class="cov8" title="1">{
+                n = args
+        }</span>
+        <span class="cov8" title="1">prompt := fmt.Sprintf("List the %s most recently modified files by running `git log --pretty='' --name-only -n %s 2&gt;/dev/null | grep -v '^$' | awk '!seen[$0]++' | head -%s`. If not a git repo, try `find . -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -newer . | head -%s`. Only show file paths, no explanation.", n, n, n, n)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdSh(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /sh &lt;命令&gt;\n示例: /sh ls -la\n示例: /sh cat README.md")
+                return
+        }</span>
+        <span class="cov8" title="1">r.getSession(chatID) // ensure session exists
+        prompt := fmt.Sprintf("Run `%s` in the current directory and return the output. Only show the command output, no explanation.", args)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) cmdFile(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /file &lt;文件路径&gt;\n示例: /file README.md\n示例: /file src/main.go")
+                return
+        }</span>
+        <span class="cov8" title="1">session := r.getSession(chatID)
+        target := findFile(session.WorkDir, args)
+        if target == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("文件不存在: %s", args))
+                return
+        }</span>
+        <span class="cov8" title="1">data, err := os.ReadFile(target)
+        if err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("读取文件出错: %v", err))
+                return
+        }</span>
+        <span class="cov8" title="1">r.sender.SendCard(ctx, chatID, CardMsg{Title: filepath.Base(target), Content: "```\n" + string(data) + "\n```"})</span>
+}
+
+// gitBranch returns the current git branch name in workDir, or empty on error.
+func gitBranch(workDir string) string <span class="cov8" title="1">{
+        if workDir == "" </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">var out bytes.Buffer
+        cmd := exec.Command("git", "-C", workDir, "rev-parse", "--abbrev-ref", "HEAD")
+        cmd.Stdout = &amp;out
+        if err := cmd.Run(); err != nil </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">branch := strings.TrimSpace(out.String())
+        if branch == "HEAD" </span><span class="cov8" title="1">{
+                return "" // detached HEAD — not useful to show
+        }</span>
+        <span class="cov8" title="1">return branch</span>
+}
+
+// gitStatusSummary returns a brief summary of working tree changes, or empty on error.
+func gitStatusSummary(workDir string) string <span class="cov8" title="1">{
+        if workDir == "" </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">var out bytes.Buffer
+        cmd := exec.Command("git", "-C", workDir, "status", "--porcelain")
+        cmd.Stdout = &amp;out
+        if err := cmd.Run(); err != nil </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">output := strings.TrimSpace(out.String())
+        if output == "" </span><span class="cov8" title="1">{
+                return "无变更"
+        }</span>
+        <span class="cov8" title="1">lines := strings.Split(output, "\n")
+        return fmt.Sprintf("%d 个文件变更", len(lines))</span>
+}
+
+// truncateForDisplay trims text to at most maxRunes runes, adding a header note if truncated.
+func truncateForDisplay(text string, maxRunes int) string <span class="cov8" title="1">{
+        runes := []rune(text)
+        if len(runes) &lt;= maxRunes </span><span class="cov8" title="1">{
+                return text
+        }</span>
+        <span class="cov8" title="1">return "（内容过长，仅显示最新部分）\n\n" + string(runes[len(runes)-maxRunes:])</span>
+}
+
+// knownCommands is the authoritative list of all supported slash commands.
+var knownCommands = []string{
+        "/help", "/ping", "/version", "/status", "/info",
+        "/pwd", "/ls", "/root", "/cd",
+        "/new", "/sessions", "/switch", "/kill", "/cancel", "/retry",
+        "/last", "/summary", "/model", "/yolo", "/safe",
+        "/git", "/diff", "/log", "/branch", "/commit", "/push", "/pr",
+        "/undo", "/stash",
+        "/grep", "/find", "/test", "/recent", "/debug", "/sh", "/file", "/compact",
+        "/doc",
+}
+
+// suggestCommand returns the known command closest to unknown (Levenshtein ≤ 3),
+// or empty string if no good match exists.
+func suggestCommand(unknown string) string <span class="cov8" title="1">{
+        best := ""
+        bestDist := 4 // only suggest if edit distance &lt; 4
+        for _, cmd := range knownCommands </span><span class="cov8" title="1">{
+                d := levenshtein(unknown, cmd)
+                if d &lt; bestDist </span><span class="cov8" title="1">{
+                        bestDist = d
+                        best = cmd
+                }</span>
+        }
+        <span class="cov8" title="1">return best</span>
+}
+
+// levenshtein computes the edit distance between strings a and b.
+func levenshtein(a, b string) int <span class="cov8" title="1">{
+        la, lb := len(a), len(b)
+        dp := make([]int, lb+1)
+        for j := range dp </span><span class="cov8" title="1">{
+                dp[j] = j
+        }</span>
+        <span class="cov8" title="1">for i := 1; i &lt;= la; i++ </span><span class="cov8" title="1">{
+                prev := dp[0]
+                dp[0] = i
+                for j := 1; j &lt;= lb; j++ </span><span class="cov8" title="1">{
+                        tmp := dp[j]
+                        if a[i-1] == b[j-1] </span><span class="cov8" title="1">{
+                                dp[j] = prev
+                        }</span> else<span class="cov8" title="1"> {
+                                dp[j] = 1 + minInt(prev, dp[j], dp[j-1])
+                        }</span>
+                        <span class="cov8" title="1">prev = tmp</span>
+                }
+        }
+        <span class="cov8" title="1">return dp[lb]</span>
+}
+
+func minInt(a, b, c int) int <span class="cov8" title="1">{
+        if a &lt; b </span><span class="cov8" title="1">{
+                if a &lt; c </span><span class="cov8" title="1">{
+                        return a
+                }</span>
+                <span class="cov8" title="1">return c</span>
+        }
+        <span class="cov8" title="1">if b &lt; c </span><span class="cov8" title="1">{
+                return b
+        }</span>
+        <span class="cov8" title="1">return c</span>
+}
+
+// underRoot reports whether path is equal to root or is directly under it.
+// It handles the edge case where root="/a/b" and path="/a/b2/..." would
+// incorrectly pass a naive strings.HasPrefix check.
+func underRoot(root, path string) bool <span class="cov8" title="1">{
+        if root == "" || path == "" </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">if path == root </span><span class="cov8" title="1">{
+                return true
+        }</span>
+        <span class="cov8" title="1">return strings.HasPrefix(path, root+string(filepath.Separator))</span>
+}
+
+func findFile(workDir, query string) string <span class="cov8" title="1">{
+        if filepath.IsAbs(query) </span><span class="cov8" title="1">{
+                return "" // Don't allow absolute paths
+        }</span>
+        <span class="cov8" title="1">exact := filepath.Join(workDir, query)
+        if _, err := os.Stat(exact); err == nil </span><span class="cov8" title="1">{
+                return exact
+        }</span>
+        <span class="cov8" title="1">query = strings.ToLower(query)
+        var match string
+        count := 0
+        filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error </span><span class="cov8" title="1">{
+                if err != nil || info.IsDir() </span><span class="cov8" title="1">{
+                        return nil
+                }</span>
+                <span class="cov8" title="1">count++
+                if count &gt; 10000 </span><span class="cov0" title="0">{
+                        return filepath.SkipAll
+                }</span>
+                <span class="cov8" title="1">if strings.Contains(strings.ToLower(info.Name()), query) </span><span class="cov8" title="1">{
+                        match = path
+                        return filepath.SkipAll
+                }</span>
+                <span class="cov8" title="1">return nil</span>
+        })
+        <span class="cov8" title="1">return match</span>
+}
+
+// findDocBinding looks up a doc binding by fuzzy path match. It tries:
+// 1. Exact path (joined with workDir)
+// 2. Case-insensitive substring match on binding keys
+// Returns (filePath, docID) or ("", "") if not found.
+func (r *Router) findDocBinding(workDir, query string) (string, string) <span class="cov8" title="1">{
+        bindings := r.store.DocBindings()
+
+        // Try exact path first
+        if !filepath.IsAbs(query) </span><span class="cov8" title="1">{
+                exact := filepath.Clean(filepath.Join(workDir, query))
+                if docID, ok := bindings[exact]; ok </span><span class="cov8" title="1">{
+                        return exact, docID
+                }</span>
+        }
+
+        // Fuzzy: case-insensitive substring match on binding keys
+        <span class="cov8" title="1">queryLower := strings.ToLower(query)
+        for path, docID := range bindings </span><span class="cov8" title="1">{
+                if strings.Contains(strings.ToLower(filepath.Base(path)), queryLower) </span><span class="cov8" title="1">{
+                        return path, docID
+                }</span>
+        }
+        <span class="cov8" title="1">return "", ""</span>
+}
+
+// resolveFilePath resolves a user-supplied path to an absolute path within
+// the work directory. It tries exact match first, then falls back to fuzzy
+// matching via findFile. Returns the resolved path or empty string if not found.
+func resolveFilePath(workDir, query string) string <span class="cov8" title="1">{
+        if filepath.IsAbs(query) </span><span class="cov8" title="1">{
+                return "" // Reject absolute paths
+        }</span>
+        <span class="cov8" title="1">exact := filepath.Join(workDir, query)
+        if _, err := os.Stat(exact); err == nil </span><span class="cov8" title="1">{
+                return filepath.Clean(exact)
+        }</span>
+        <span class="cov8" title="1">return findFile(workDir, query)</span>
+}
+
+func (r *Router) cmdDoc(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        parts := strings.SplitN(args, " ", 2)
+        sub := ""
+        subArgs := ""
+        if len(parts) &gt; 0 </span><span class="cov8" title="1">{
+                sub = strings.ToLower(parts[0])
+        }</span>
+        <span class="cov8" title="1">if len(parts) &gt; 1 </span><span class="cov8" title="1">{
+                subArgs = strings.TrimSpace(parts[1])
+        }</span>
+
+        <span class="cov8" title="1">switch sub </span>{
+        case "push":<span class="cov8" title="1">
+                r.cmdDocPush(ctx, chatID, subArgs)</span>
+        case "pull":<span class="cov8" title="1">
+                r.cmdDocPull(ctx, chatID, subArgs)</span>
+        case "bind":<span class="cov8" title="1">
+                r.cmdDocBind(ctx, chatID, subArgs)</span>
+        case "unbind":<span class="cov8" title="1">
+                r.cmdDocUnbind(ctx, chatID, subArgs)</span>
+        case "list":<span class="cov8" title="1">
+                r.cmdDocList(ctx, chatID)</span>
+        case "":<span class="cov8" title="1">
+                r.sender.SendText(ctx, chatID, "用法: /doc &lt;子命令&gt;\n\n子命令: push | pull | bind | unbind | list\n示例: /doc push README.md")</span>
+        default:<span class="cov8" title="1">
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("未知的 doc 子命令: %s\n\n支持的子命令: push | pull | bind | unbind | list", sub))</span>
+        }
+}
+
+func (r *Router) cmdDocPush(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if r.docSyncer == nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "飞书文档同步未配置，请联系管理员检查 API 配置。")
+                return
+        }</span>
+        <span class="cov8" title="1">if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /doc push &lt;文件路径&gt;\n示例: /doc push README.md")
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+        filePath := resolveFilePath(session.WorkDir, args)
+        if filePath == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("文件不存在: %s", args))
+                return
+        }</span>
+
+        <span class="cov8" title="1">root := r.store.WorkRoot()
+        if !underRoot(root, filePath) </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "不允许访问工作根目录以外的文件: "+root)
+                return
+        }</span>
+
+        <span class="cov8" title="1">data, err := os.ReadFile(filePath)
+        if err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("读取文件出错: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">title := filepath.Base(filePath)
+        content := string(data)
+
+        docID, docURL, err := r.docSyncer.CreateAndPushDoc(ctx, title, content)
+        if err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("推送文档出错: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.store.SetDocBinding(filePath, docID)
+        r.save()
+
+        md := fmt.Sprintf("**文档 ID:** %s\n**链接:** [%s](%s)", docID, docURL, docURL)
+        r.sender.SendCard(ctx, chatID, CardMsg{Title: "✓ 文档已推送", Content: md})</span>
+}
+
+func (r *Router) cmdDocPull(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if r.docSyncer == nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "飞书文档同步未配置，请联系管理员检查 API 配置。")
+                return
+        }</span>
+        <span class="cov8" title="1">if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /doc pull &lt;文件路径&gt;\n示例: /doc pull README.md\n\n需先用 /doc bind 绑定文件到飞书文档。")
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+        filePath, docID := r.findDocBinding(session.WorkDir, args)
+        if docID == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到 %s 的绑定关系，请先用 /doc bind 绑定到飞书文档。", args))
+                return
+        }</span>
+
+        <span class="cov8" title="1">root := r.store.WorkRoot()
+        if !underRoot(root, filePath) </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "不允许访问工作根目录以外的文件: "+root)
+                return
+        }</span>
+
+        <span class="cov8" title="1">content, err := r.docSyncer.PullDocContent(ctx, docID)
+        if err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("拉取文档出错: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">if err := os.WriteFile(filePath, []byte(content), 0644); err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("写入文件出错: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 文档已拉取到: %s", args))</span>
+}
+
+func (r *Router) cmdDocBind(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        parts := strings.SplitN(args, " ", 2)
+        if len(parts) &lt; 2 </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /doc bind &lt;文件路径&gt; &lt;文档URL或ID&gt;\n示例: /doc bind README.md https://example.feishu.cn/docx/xxx")
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+        filePath := resolveFilePath(session.WorkDir, parts[0])
+        if filePath == "" </span><span class="cov8" title="1">{
+                // For bind, allow binding a not-yet-existing file (exact path)
+                filePath = filepath.Clean(filepath.Join(session.WorkDir, parts[0]))
+        }</span>
+
+        <span class="cov8" title="1">root := r.store.WorkRoot()
+        if !underRoot(root, filePath) </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "不允许访问工作根目录以外的文件: "+root)
+                return
+        }</span>
+
+        <span class="cov8" title="1">docID := ParseDocID(parts[1])
+        r.store.SetDocBinding(filePath, docID)
+        r.save()
+
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已绑定: %s → %s", parts[0], docID))</span>
+}
+
+func (r *Router) cmdDocUnbind(ctx context.Context, chatID, args string) <span class="cov8" title="1">{
+        if args == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "用法: /doc unbind &lt;文件路径&gt;\n示例: /doc unbind README.md")
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+        filePath, docID := r.findDocBinding(session.WorkDir, args)
+        if docID == "" </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("未找到 %s 的绑定关系，使用 /doc list 查看已有绑定。", args))
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.store.RemoveDocBinding(filePath)
+        r.save()
+
+        r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 已解除绑定: %s", args))</span>
+}
+
+func (r *Router) cmdDocList(ctx context.Context, chatID string) <span class="cov8" title="1">{
+        bindings := r.store.DocBindings()
+        if len(bindings) == 0 </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, "暂无绑定关系。使用 /doc bind &lt;路径&gt; &lt;URL&gt; 创建绑定。")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var lines []string
+        for path, docID := range bindings </span><span class="cov8" title="1">{
+                lines = append(lines, fmt.Sprintf("**%s** -&gt; %s", path, docID))
+        }</span>
+        <span class="cov8" title="1">r.sender.SendCard(ctx, chatID, CardMsg{Title: "文档绑定列表", Content: strings.Join(lines, "\n")})</span>
+}
+
+func (r *Router) RouteImage(ctx context.Context, chatID, userID string, imageData []byte, fileName string) <span class="cov8" title="1">{
+        if !r.allowedUsers[userID] </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+
+        // Save image to work directory
+        imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+        if err := os.MkdirAll(imgDir, 0755); err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to create image directory: %v", err))
+                return
+        }</span>
+        <span class="cov8" title="1">imgPath := filepath.Join(imgDir, filepath.Base(fileName))
+        if err := os.WriteFile(imgPath, imageData, 0644); err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("图片保存失败: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 图片已保存: %s", imgPath))
+        prompt := fmt.Sprintf("用户发来了一张图片，已保存到: %s。请描述或处理这张图片。", imgPath)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) RouteTextWithImages(ctx context.Context, chatID, userID, text string, images []ImageAttachment) <span class="cov8" title="1">{
+        if !r.allowedUsers[userID] </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+
+        // Save all images to work directory
+        imgDir := filepath.Join(session.WorkDir, ".devbot-images")
+        if err := os.MkdirAll(imgDir, 0755); err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to create image directory: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">var savedPaths []string
+        for _, img := range images </span><span class="cov8" title="1">{
+                imgPath := filepath.Join(imgDir, filepath.Base(img.FileName))
+                if err := os.WriteFile(imgPath, img.Data, 0644); err != nil </span><span class="cov8" title="1">{
+                        log.Printf("router: failed to save image %s: %v", img.FileName, err)
+                        continue</span>
+                }
+                <span class="cov8" title="1">savedPaths = append(savedPaths, imgPath)</span>
+        }
+
+        // Build prompt combining text and image paths
+        <span class="cov8" title="1">var prompt string
+        if text != "" &amp;&amp; len(savedPaths) &gt; 0 </span><span class="cov8" title="1">{
+                prompt = text + "\n\n附带图片路径: " + strings.Join(savedPaths, ", ")
+        }</span> else<span class="cov8" title="1"> if text != "" </span><span class="cov8" title="1">{
+                prompt = text
+        }</span> else<span class="cov8" title="1"> if len(savedPaths) &gt; 0 </span><span class="cov8" title="1">{
+                prompt = fmt.Sprintf("用户发来了一张图片，已保存到: %s。请描述或处理这张图片。", savedPaths[0])
+        }</span> else<span class="cov8" title="1"> {
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) RouteFile(ctx context.Context, chatID, userID, fileName string, fileData []byte) <span class="cov8" title="1">{
+        if !r.allowedUsers[userID] </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">session := r.getSession(chatID)
+
+        // Save file to work directory (use Base to prevent path traversal)
+        filePath := filepath.Join(session.WorkDir, filepath.Base(fileName))
+        if err := os.WriteFile(filePath, fileData, 0644); err != nil </span><span class="cov8" title="1">{
+                r.sender.SendText(ctx, chatID, fmt.Sprintf("Failed to save file: %v", err))
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 文件已保存: %s", filePath))
+        prompt := fmt.Sprintf("用户发来了文件 '%s'，已保存到: %s。请检查或处理这个文件。", fileName, filePath)
+        r.execClaudeQueued(ctx, chatID, prompt)</span>
+}
+
+func (r *Router) RouteDocShare(ctx context.Context, chatID, userID, docID string) <span class="cov8" title="1">{
+        if !r.allowedUsers[userID] </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, fmt.Sprintf("检测到飞书文档: %s\n\n- 使用 `/doc bind &lt;本地路径&gt; %s` 绑定到本地文件\n- 或使用 `/doc pull &lt;路径&gt;` 拉取内容（如已绑定）", docID, docID))</span>
+}
+
+func (r *Router) handlePrompt(ctx context.Context, chatID, text string) <span class="cov8" title="1">{
+        r.getSession(chatID) // ensure session exists
+        // Save prompt before queuing so /retry is always available
+        r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                s.LastPrompt = text
+        }</span>)
+        <span class="cov8" title="1">r.execClaudeQueued(ctx, chatID, text)</span>
+}
+
+func (r *Router) execClaudeQueued(ctx context.Context, chatID string, prompt string) <span class="cov8" title="1">{
+        if r.queue != nil </span><span class="cov8" title="1">{
+                pending := r.queue.PendingCount(chatID)
+                if pending &gt; 0 </span><span class="cov8" title="1">{
+                        r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("已排队（第 %d 位）", pending+1), Content: "当前有任务正在执行，请稍候...", Template: "blue"})
+                }</span>
+                <span class="cov8" title="1">if err := r.queue.Enqueue(chatID, func() </span><span class="cov8" title="1">{
+                        r.execClaude(r.ctx, chatID, prompt)
+                }</span>); err != nil <span class="cov8" title="1">{
+                        r.sender.SendText(ctx, chatID, "队列已满，请稍后再试。")
+                }</span>
+        } else<span class="cov8" title="1"> {
+                r.execClaude(ctx, chatID, prompt)
+        }</span>
+}
+
+func (r *Router) execClaude(ctx context.Context, chatID string, prompt string) <span class="cov8" title="1">{
+        r.sender.SendText(ctx, chatID, "执行中...")
+
+        workDir, sessionID, permMode, model := r.store.SessionExecParams(chatID)
+        if permMode == "" </span><span class="cov8" title="1">{
+                permMode = "safe"
+        }</span>
+
+        <span class="cov8" title="1">startTime := time.Now()
+        var lastSendTime time.Time
+        var lastProgressContent string
+
+        onProgress := func(text string) </span><span class="cov8" title="1">{
+                now := time.Now()
+                elapsed := now.Sub(startTime)
+                sinceLast := now.Sub(lastSendTime)
+
+                // Only send progress after 5 seconds, then every 10 seconds
+                if elapsed &lt; 5*time.Second </span><span class="cov8" title="1">{
+                        return
+                }</span>
+                <span class="cov8" title="1">if sinceLast &lt; 10*time.Second </span><span class="cov8" title="1">{
+                        return
+                }</span>
+
+                <span class="cov8" title="1">lastSendTime = now
+                display := truncateForDisplay(strings.TrimSpace(text), 4000)
+                lastProgressContent = display
+                r.sender.SendCard(ctx, chatID, CardMsg{Content: display})</span>
+        }
+
+        <span class="cov8" title="1">result, err := r.executor.ExecStream(ctx, prompt, workDir, sessionID, permMode, model, onProgress)
+        elapsed := time.Since(startTime).Truncate(time.Second)
+        if err != nil </span><span class="cov8" title="1">{
+                // Auto-recover: if Claude session no longer exists, clear it and retry without --resume
+                if sessionID != "" &amp;&amp; strings.Contains(err.Error(), "No conversation found with session ID") </span><span class="cov8" title="1">{
+                        log.Printf("router: session %s not found, clearing and retrying without resume (chat=%s)", sessionID, chatID)
+                        r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                                s.History = append(s.History, s.ClaudeSessionID)
+                                s.ClaudeSessionID = ""
+                        }</span>)
+                        <span class="cov8" title="1">r.save()
+                        result, err = r.executor.ExecStream(ctx, prompt, workDir, "", permMode, model, onProgress)
+                        elapsed = time.Since(startTime).Truncate(time.Second)</span>
+                }
+        }
+        <span class="cov8" title="1">if err != nil </span><span class="cov8" title="1">{
+                log.Printf("router: execClaude error chat=%s elapsed=%s: %v", chatID, elapsed, err)
+                r.sender.SendCard(ctx, chatID, CardMsg{Title: fmt.Sprintf("执行出错（%s）", elapsed), Content: fmt.Sprintf("%v", err), Template: "red"})
+                return
+        }</span>
+
+        <span class="cov8" title="1">r.store.UpdateSession(chatID, func(s *Session) </span><span class="cov8" title="1">{
+                s.LastOutput = result.Output
+                if result.SessionID != "" </span><span class="cov8" title="1">{
+                        s.ClaudeSessionID = result.SessionID
+                        // Keep dir→session map in sync
+                        if s.DirSessions == nil </span><span class="cov8" title="1">{
+                                s.DirSessions = make(map[string]string)
+                        }</span>
+                        <span class="cov8" title="1">if s.WorkDir != "" </span><span class="cov8" title="1">{
+                                s.DirSessions[s.WorkDir] = result.SessionID
+                        }</span>
+                }
+        })
+        <span class="cov8" title="1">r.save()
+
+        output := result.Output
+        if output == "" </span><span class="cov8" title="1">{
+                output = "（无输出）"
+        }</span>
+        <span class="cov8" title="1">output = strings.TrimSpace(output)
+        if result.IsPermissionDenial </span><span class="cov8" title="1">{
+                if output != lastProgressContent </span><span class="cov8" title="1">{
+                        r.sender.SendCard(ctx, chatID, CardMsg{Title: "Claude 需要确认", Content: output + "\n\n使用 `/yolo` 开启无限制模式以跳过确认。", Template: "purple"})
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+        // Skip result card if identical to the last progress card
+        <span class="cov8" title="1">if output != lastProgressContent </span><span class="cov8" title="1">{
+                r.sender.SendCard(ctx, chatID, CardMsg{Content: output})
+        }</span>
+        <span class="cov8" title="1">r.sender.SendText(ctx, chatID, fmt.Sprintf("✓ 完成（耗时 %s）", elapsed))</span>
+}
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package bot
+
+import (
+    "context"
+    "encoding/json"
+    "log"
+    "strings"
+    "unicode/utf8"
+
+    lark "github.com/larksuite/oapi-sdk-go/v3"
+    larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+)
+
+const MaxMessageLen = 4000
+
+type LarkSender struct {
+        client *lark.Client
+}
+
+func NewLarkSender(client *lark.Client) *LarkSender <span class="cov0" title="0">{
+    return &amp;LarkSender{client: client}
+}</span>
+
+func buildSendMessageBody(chatID, text string) map[string]interface{} <span class="cov8" title="1">{
+    // Use json.Marshal for proper escaping of newlines, quotes, etc.
+    // The SDK's TextMsgBuilder.Text() does NOT escape special characters.
+    content, _ := json.Marshal(map[string]string{"text": text})
+    return map[string]interface{}{
+        "receive_id": chatID,
+        "msg_type":   "text",
+        "content":    string(content),
+    }
+}</span>
+
+func (s *LarkSender) SendText(ctx context.Context, chatID, text string) error <span class="cov0" title="0">{
+        body := buildSendMessageBody(chatID, text)
+        resp, err := s.client.Post(
+                ctx,
+                "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+                body,
+                larkcore.AccessTokenTypeTenant,
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("sender: SendText failed chat=%s: %v", chatID, err)
+                return err
+        }</span>
+        <span class="cov0" title="0">if resp != nil &amp;&amp; resp.StatusCode != 200 </span><span class="cov0" title="0">{
+                log.Printf("sender: SendText non-200 chat=%s status=%d body=%s", chatID, resp.StatusCode, string(resp.RawBody))
+        }</span> else<span class="cov0" title="0"> if resp != nil </span><span class="cov0" title="0">{
+                // Check for API-level errors in response body
+                var codeErr struct {
+                        Code int    `json:"code"`
+                        Msg  string `json:"msg"`
+                }
+                if json.Unmarshal(resp.RawBody, &amp;codeErr) == nil &amp;&amp; codeErr.Code != 0 </span><span class="cov0" title="0">{
+                        log.Printf("sender: SendText API error chat=%s code=%d msg=%s", chatID, codeErr.Code, codeErr.Msg)
+                }</span>
+        }
+        <span class="cov0" title="0">return nil</span>
+}
+
+func SplitMessage(text string, maxLen int) []string <span class="cov8" title="1">{
+        if len(text) &lt;= maxLen </span><span class="cov8" title="1">{
+                return []string{text}
+        }</span>
+
+        <span class="cov8" title="1">var chunks []string
+        for len(text) &gt; 0 </span><span class="cov8" title="1">{
+                if len(text) &lt;= maxLen </span><span class="cov8" title="1">{
+                        chunks = append(chunks, text)
+                        break</span>
+                }
+
+                // Find a good cut point within maxLen bytes
+                <span class="cov8" title="1">cutAt := maxLen
+                // Don't cut in the middle of a UTF-8 character
+                for cutAt &gt; 0 &amp;&amp; cutAt &lt; len(text) &amp;&amp; !utf8.RuneStart(text[cutAt]) </span><span class="cov8" title="1">{
+                        cutAt--
+                }</span>
+
+                // Try to find a newline to split at
+                <span class="cov8" title="1">lastNewline := -1
+                for i := 0; i &lt; cutAt; i++ </span><span class="cov8" title="1">{
+                        if text[i] == '\n' </span><span class="cov8" title="1">{
+                                lastNewline = i + 1
+                        }</span>
+                }
+                <span class="cov8" title="1">if lastNewline &gt; 0 </span><span class="cov8" title="1">{
+                        cutAt = lastNewline
+                }</span>
+
+                <span class="cov8" title="1">chunks = append(chunks, text[:cutAt])
+                text = text[cutAt:]</span>
+        }
+        <span class="cov8" title="1">return chunks</span>
+}
+
+func (s *LarkSender) SendTextChunked(ctx context.Context, chatID, text string) error <span class="cov0" title="0">{
+        chunks := SplitMessage(text, MaxMessageLen)
+        for _, chunk := range chunks </span><span class="cov0" title="0">{
+                if err := s.SendText(ctx, chatID, chunk); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+        <span class="cov0" title="0">return nil</span>
+}
+
+const MaxCardLen = 30000
+
+func buildCardBody(card CardMsg) map[string]interface{} <span class="cov8" title="1">{
+        content := strings.TrimLeft(card.Content, " \t\r\n")
+        body := map[string]interface{}{
+                "elements": []map[string]interface{}{
+                        {
+                                "tag":     "markdown",
+                                "content": content,
+                        },
+                },
+        }
+        if card.Title != "" </span><span class="cov8" title="1">{
+                tmpl := card.Template
+                if tmpl == "" </span><span class="cov8" title="1">{
+                        tmpl = "blue"
+                }</span>
+                <span class="cov8" title="1">body["header"] = map[string]interface{}{
+                        "title": map[string]interface{}{
+                                "tag":     "plain_text",
+                                "content": card.Title,
+                        },
+                        "template": tmpl,
+                }</span>
+        }
+        <span class="cov8" title="1">return body</span>
+}
+
+func (s *LarkSender) SendCard(ctx context.Context, chatID string, card CardMsg) error <span class="cov0" title="0">{
+        cardJSON, err := json.Marshal(buildCardBody(card))
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("sender: failed to marshal card: %v", err)
+                return err
+        }</span>
+
+        // If serialized card exceeds limit, fall back to plain text
+        <span class="cov0" title="0">if len(cardJSON) &gt; MaxCardLen </span><span class="cov0" title="0">{
+                fallback := card.Content
+                if card.Title != "" </span><span class="cov0" title="0">{
+                        fallback = card.Title + "\n\n" + card.Content
+                }</span>
+                <span class="cov0" title="0">return s.SendTextChunked(ctx, chatID, fallback)</span>
+        }
+
+        <span class="cov0" title="0">body := map[string]interface{}{
+                "receive_id": chatID,
+                "msg_type":   "interactive",
+                "content":    string(cardJSON),
+        }
+
+        resp, err := s.client.Post(
+                ctx,
+                "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+                body,
+                larkcore.AccessTokenTypeTenant,
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("sender: SendCard failed chat=%s: %v", chatID, err)
+                return err
+        }</span>
+        <span class="cov0" title="0">if resp != nil &amp;&amp; resp.StatusCode != 200 </span><span class="cov0" title="0">{
+                log.Printf("sender: SendCard non-200 chat=%s status=%d body=%s", chatID, resp.StatusCode, string(resp.RawBody))
+        }</span> else<span class="cov0" title="0"> if resp != nil </span><span class="cov0" title="0">{
+                var codeErr struct {
+                        Code int    `json:"code"`
+                        Msg  string `json:"msg"`
+                }
+                if json.Unmarshal(resp.RawBody, &amp;codeErr) == nil &amp;&amp; codeErr.Code != 0 </span><span class="cov0" title="0">{
+                        log.Printf("sender: SendCard API error chat=%s code=%d msg=%s", chatID, codeErr.Code, codeErr.Msg)
+                }</span>
+        }
+        <span class="cov0" title="0">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file9" style="display: none">package bot
+
+import (
+        "encoding/json"
+        "os"
+        "path/filepath"
+        "sync"
+)
+
+type Session struct {
+        ClaudeSessionID string            `json:"claudeSessionID,omitempty"`
+        WorkDir         string            `json:"workDir,omitempty"`
+        Model           string            `json:"model,omitempty"`
+        PermissionMode  string            `json:"permissionMode,omitempty"`
+        History         []string          `json:"history,omitempty"`
+        LastOutput      string            `json:"lastOutput,omitempty"`
+        LastPrompt      string            `json:"lastPrompt,omitempty"`
+        DirSessions     map[string]string `json:"dirSessions,omitempty"`
+}
+
+type State struct {
+        Chats       map[string]*Session `json:"chats"`
+        DocBindings map[string]string   `json:"docBindings"`
+        WorkRoot    string              `json:"workRoot,omitempty"`
+}
+
+type Store struct {
+        mu    sync.RWMutex
+        path  string
+        state *State
+}
+
+func NewStore(path string) (*Store, error) <span class="cov8" title="1">{
+        s := &amp;Store{
+                path: path,
+                state: &amp;State{
+                        Chats:       make(map[string]*Session),
+                        DocBindings: make(map[string]string),
+                },
+        }
+        data, err := os.ReadFile(path)
+        if err != nil </span><span class="cov8" title="1">{
+                if os.IsNotExist(err) </span><span class="cov8" title="1">{
+                        return s, nil
+                }</span>
+                <span class="cov8" title="1">return nil, err</span>
+        }
+        <span class="cov8" title="1">if err := json.Unmarshal(data, s.state); err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">if s.state.Chats == nil </span><span class="cov8" title="1">{
+                s.state.Chats = make(map[string]*Session)
+        }</span>
+        <span class="cov8" title="1">if s.state.DocBindings == nil </span><span class="cov8" title="1">{
+                s.state.DocBindings = make(map[string]string)
+        }</span>
+        <span class="cov8" title="1">return s, nil</span>
+}
+
+// State returns the raw state pointer. Kept for backward compatibility in tests;
+// production code should use the thread-safe accessors below.
+func (s *Store) State() *State <span class="cov8" title="1">{
+        return s.state
+}</span>
+
+// GetSession returns a snapshot copy of the session for chatID, creating one
+// if needed with defaults. The returned value is safe to read without locks.
+// To mutate session fields, use UpdateSession.
+func (s *Store) GetSession(chatID, defaultWorkDir, defaultModel string) Session <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        sess := s.state.Chats[chatID]
+        if sess == nil </span><span class="cov8" title="1">{
+                sess = &amp;Session{
+                        WorkDir: defaultWorkDir,
+                        Model:   defaultModel,
+                }
+                s.state.Chats[chatID] = sess
+        }</span>
+        // Return a value copy — callers get a consistent snapshot
+        <span class="cov8" title="1">cp := *sess
+        cp.History = append([]string(nil), sess.History...)
+        return cp</span>
+}
+
+func (s *Store) WorkRoot() string <span class="cov8" title="1">{
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+        return s.state.WorkRoot
+}</span>
+
+func (s *Store) SetWorkRoot(root string) <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        s.state.WorkRoot = root
+}</span>
+
+func (s *Store) DocBindings() map[string]string <span class="cov8" title="1">{
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+        // Return a copy
+        cp := make(map[string]string, len(s.state.DocBindings))
+        for k, v := range s.state.DocBindings </span><span class="cov8" title="1">{
+                cp[k] = v
+        }</span>
+        <span class="cov8" title="1">return cp</span>
+}
+
+func (s *Store) SetDocBinding(filePath, docID string) <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        s.state.DocBindings[filePath] = docID
+}</span>
+
+func (s *Store) RemoveDocBinding(filePath string) <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        delete(s.state.DocBindings, filePath)
+}</span>
+
+// UpdateSession runs fn with the session for chatID under the write lock.
+// The session must already exist (via GetSession).
+func (s *Store) UpdateSession(chatID string, fn func(*Session)) <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        if sess, ok := s.state.Chats[chatID]; ok </span><span class="cov8" title="1">{
+                fn(sess)
+        }</span>
+}
+
+// SessionExecParams returns execution parameters for a session under read lock.
+func (s *Store) SessionExecParams(chatID string) (workDir, sessionID, permMode, model string) <span class="cov8" title="1">{
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+        sess := s.state.Chats[chatID]
+        if sess == nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">return sess.WorkDir, sess.ClaudeSessionID, sess.PermissionMode, sess.Model</span>
+}
+
+func (s *Store) Save() error <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        data, err := json.MarshalIndent(s.state, "", "  ")
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">dir := filepath.Dir(s.path)
+        if err := os.MkdirAll(dir, 0755); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">tmp := s.path + ".tmp"
+        if err := os.WriteFile(tmp, data, 0644); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">return os.Rename(tmp, s.path)</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
